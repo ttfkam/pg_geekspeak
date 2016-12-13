@@ -3,6 +3,8 @@
 -- Miles Elam <miles@geekspeak.org>
 --
 -- Depends on audit
+--            content_utils
+--            newsfeeds
 -- ---------------------------------------------------------------------------
 
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
