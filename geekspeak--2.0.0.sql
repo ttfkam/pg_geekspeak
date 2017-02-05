@@ -68,7 +68,8 @@ CREATE TYPE role AS ENUM (
     'offair',
     'guest',
     'audience',
-    'phones'
+    'phones',
+    'patron'
 );
 
 COMMENT ON TYPE role IS
@@ -78,7 +79,7 @@ COMMENT ON TYPE role IS
 -- Formerly known as users. Using the term "people" and "person" since "user" is overloaded.
 --
 CREATE TABLE people (
-    id integer NOT NULL,
+    id integer NOT NULL PRIMARY KEY,
     email character varying(126) NOT NULL UNIQUE,
     encrypted_password character(60) NOT NULL CHECK (length(encrypted_password) = 60),
     created timestamp without time zone DEFAULT now() NOT NULL,
@@ -108,14 +109,14 @@ COMMENT ON COLUMN people.description IS
 -- Logins and persistent sessions
 --
 CREATE TABLE sessions (
-    nonce uuid NOT NULL,
+    nonce uuid NOT NULL PRIMARY KEY,
     person integer NOT NULL FOREIGN KEY REFERENCES people(id) ON UPDATE CASCADE ON DELETE RESTRICT,
     created timestamp without time zone DEFAULT now() NOT NULL,
     expires timestamp without time zone
         DEFAULT (now() + (current_setting('gs.session_duration'::text))::interval) NOT NULL,
     for_reset boolean DEFAULT false NOT NULL,
     ips inet[] NOT NULL,
-    user_agent character varying DEFAULT 'BOT'::character varying NOT NULL
+    user_agent character varying DEFAULT ''::character varying NOT NULL
 );
 
 ALTER TABLE ONLY sessions
@@ -186,7 +187,7 @@ COMMENT ON COLUMN locations.nickname IS
 --
 CREATE TABLE episodes (
     id serial NOT NULL PRIMARY KEY,
-    title character varying(126) DEFAULT '*** UNTITLED ***'::character varying NOT NULL,
+    title character varying(126),
     promo text,
     description text,
     num episode_num NOT NULL UNIQUE,
@@ -572,7 +573,7 @@ CREATE FUNCTION person(nonce uuid, ip inet) RETURNS jsonb
 LANGUAGE plpgsql STRICT LEAKPROOF AS $$
   DECLARE
   result jsonb := null;
-  
+
   BEGIN
   SELECT to_jsonb(userdata)
     INTO STRICT result
