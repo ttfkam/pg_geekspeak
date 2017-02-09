@@ -11,57 +11,17 @@
 \echo Use "CREATE EXTENSION geekspeak" to load this file. \quit
 
 --
--- Web app user authorization
---
-CREATE TYPE acl AS ENUM (
-    'disable',
-    'superuser',
-    'onair',
-    'offair',
-    'patron',
-    'authenticated'
-);
-
-COMMENT ON TYPE acl IS
-'Web app user authorization';
-
---
 -- Created as a domain to make it easier to identify when being used
 --
 CREATE DOMAIN episode_num AS smallint;
 
 --
--- To be used later
---
-CREATE TYPE mime_type AS ENUM (
-    'application/octet-stream',
-    'application/pdf',
-    'image/png',
-    'image/jpeg',
-    'image/gif',
-    'image/svg+xml',
-    'audio/mpeg',
-    'audio/mp4',
-    'audio/ogg',
-    'audio/wav',
-    'audio/flac',
-    'video/mp4',
-    'video/ogg',
-    'video/webm',
-    'text/plain',
-    'text/rtf',
-    'text/csv',
-    'text/calendar',
-    'text/html',
-    'text/xml',
-    'text/css',
-    'text/javascript'
-);
-
---
 -- Show roles. Some are defunct due to the loss of KUSP, but kept for historical lookup.
 --
 CREATE TYPE role AS ENUM (
+    'denied',
+    'authenticated',
+    'superuser',
     'host',
     'board',
     'onair',
@@ -86,15 +46,15 @@ CREATE TABLE people (
     display_name character varying(126),
     bio text,
     description character varying(126),
-    acls acl[] DEFAULT '{}'::acl[] NOT NULL,
+    acls role[] DEFAULT '{}'::role[] NOT NULL,
     modified timestamp without time zone DEFAULT now() NOT NULL
 );
 
 COMMENT ON TABLE people IS
 'Formerly known as users. Using the term "people" and "person" since not all those listed will
  directly access the system. Also "user" is such an overloaded term, it does not hurt to avoid
- keyword collisions. To prevent someone from logging in without deleting their account, add the acl
- "disabled" to the acls array.';
+ keyword collisions. To prevent someone from logging in without deleting their account, add the
+ role "denied" to the acls array.';
 
 COMMENT ON COLUMN people.encrypted_password IS
 'Salted Blowfish. Access through gs.login(email, password, IP, user agent), not directly.';
@@ -151,7 +111,7 @@ CREATE VIEW user_sessions AS
          (p.encrypted_password IS NOT NULL) AS has_password
     FROM people p
     LEFT JOIN sessions s ON ((p.id = s.person))
-    WHERE ((s.expires > now()) AND (NOT (p.acls @> '{disable}'::acl[])));
+    WHERE ((s.expires > now()) AND (NOT (p.acls @> '{denied}'::role[])));
 
 COMMENT ON VIEW user_sessions IS
 'Simplified view to see who is logged in, how long they''ve been logged in, and what client
@@ -298,15 +258,16 @@ CREATE UNIQUE INDEX episode_headline_udx ON bits
 CREATE FUNCTION add_headline_bit(article json, submitter integer) RETURNS integer
 LANGUAGE sql STRICT LEAKPROOF AS $$
   WITH hl AS (
-    INSERT INTO headlines (source, url, labels, metadata, https, teaser_image, content, favicon)
+    INSERT INTO headlines (source, url, title, description, labels, metadata, https,
+                           teaser_image, content, favicon)
       (SELECT source(article->>'source', article->>'url'),
            regexp_replace(coalesce(article->>'canonical', article->>'url'), '^https?:(.+)$', '\1'),
+           coalesce(article->>'og_title', article->>'title', article->>'twitter_title',
+                               article->>'url')
+           article->>'description',
            coalesce(string_to_array(article->>'keywords', ',', '')::varchar[], '{}'::varchar[]),
-           jsonb_object('{title,description,type,locale}'::text[],
+           jsonb_object('{type,locale}'::text[],
                     array[
-                      coalesce(article->>'og_title', article->>'title', article->>'twitter_title',
-                               'Untitled'::text),
-                      coalesce(article->>'description', ''::text),
                       coalesce(article->>'og_type', 'article'::text),
                       coalesce(article->>'og_locale', article->>'locale', 'en'::text)]),
            position('https://' in coalesce(article->>'canonical', article->>'url')) = 0,
@@ -342,7 +303,7 @@ COMMENT ON FUNCTION add_ip(ips inet[], ip inet) IS
 
 CREATE FUNCTION authorize(
                   session_id uuid, ip inet, client character varying,
-                  requirement acl DEFAULT 'authenticated'::acl, OUT authorized boolean,
+                  requirement role DEFAULT 'authenticated'::role, OUT authorized boolean,
                   OUT new_expires timestamp without time zone) RETURNS record
 LANGUAGE sql STRICT LEAKPROOF AS $$-- Keep the session going either way
   UPDATE sessions
@@ -352,9 +313,9 @@ LANGUAGE sql STRICT LEAKPROOF AS $$-- Keep the session going either way
         AND expires > (now() - (current_setting('gs.session_duration')::interval / 2));
 
   -- Find out if authorized and when the session goes away
-  SELECT (NOT acls @> '{disable}'::acl[]
-             AND (acls || '{authenticated}'::acl[])
-                 && ARRAY['superuser'::gs.acl,requirement]) AS authorized,
+  SELECT (NOT acls @> '{denied}'::role[]
+             AND (acls || '{authenticated}'::role[])
+                 && ARRAY['superuser'::role,requirement]) AS authorized,
       nullif(session_expires, now() + current_setting('gs.session_duration')::interval)
           AS new_expires
     FROM user_sessions;
@@ -396,7 +357,7 @@ LANGUAGE sql STRICT AS $$
                       AND for_reset = true
                       AND expires > now()
                       AND ips[1] = ip)
-       AND NOT acls @> ARRAY['disable'::acl];
+       AND NOT acls @> ARRAY['denied'::role];
 
   -- Extend the session timeout and return the user data, but keep the nonce separate since it is
   -- a session id, not data
@@ -419,7 +380,6 @@ $$;
 COMMENT ON FUNCTION confirm(nonce uuid, plain_password character varying, ip inet) IS
 'Confirming valid email address and setting new password. Session is marked no longer for reset,'
 || ' and the expiry is pushed out.';
-
 
 CREATE FUNCTION episode_as_json(episode episode_num, lastmod timestamp without time zone,
                                 OUT json jsonb, OUT modified timestamp without time zone)
@@ -493,7 +453,7 @@ LANGUAGE sql STRICT LEAKPROOF AS $$
          LEFT JOIN (SELECT nonce, person
                       FROM sessions
                       WHERE expires > now() AND user_agent = agent) AS s ON p.id = s.person
-         WHERE email = email AND NOT acls @> array['disable'::acl]
+         WHERE email = email AND NOT acls @> array['denied'::role]
                AND encrypted_password = crypt(plain_password, encrypted_password))
       ON CONFLICT (nonce) DO UPDATE
           SET ips = gs.add_ip(gs.sessions.ips, ip),
@@ -580,7 +540,7 @@ LANGUAGE plpgsql STRICT LEAKPROOF AS $$
     FROM (SELECT email, display_name, description, bio
             FROM people p, sessions s
             WHERE nonce = nonce AND p.id = s.person AND expires > now()
-                  AND NOT p.acls @> array['disable'::acl]) userdata;
+                  AND NOT p.acls @> array['denied'::role]) userdata;
 
   IF result IS NOT NULL THEN
     UPDATE sessions
@@ -616,7 +576,7 @@ LANGUAGE sql STABLE STRICT AS $$
   INSERT INTO sessions (nonce, person, for_reset, ips)
     (SELECT gen_random_uuid(), id, true, array[ip]
        FROM people
-       WHERE email = email and not acls @> '{"disable"}'::acl[]);
+       WHERE email = email and not acls @> '{"denied"}'::role[]);
 $$;
 
 COMMENT ON FUNCTION recover(email character varying, ip inet, user_agent character varying) IS
