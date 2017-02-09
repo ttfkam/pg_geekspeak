@@ -326,7 +326,7 @@ LANGUAGE sql STRICT LEAKPROOF AS $$
   WITH hl AS (
     INSERT INTO headlines (source, url, title, description, labels, metadata, https,
                            teaser_image, content, favicon)
-      (SELECT source(article->>'source', article->>'url'),
+      VALUES(source(article->>'source', article->>'url'),
            regexp_replace(coalesce(article->>'canonical', article->>'url'), '^https?:(.+)$', '\1'),
            coalesce(article->>'og_title', article->>'title', article->>'twitter_title',
                                article->>'url')
@@ -408,7 +408,7 @@ $$;
 CREATE FUNCTION bits_as_json(ordered_bits integer[]) RETURNS jsonb
 LANGUAGE sql STABLE STRICT LEAKPROOF AS $$
   SELECT jsonb_agg(bits)
-    FROM gs.bits(ordered_bits) AS bits;
+    FROM bits(ordered_bits) AS bits;
 $$;
 
 CREATE FUNCTION clean_query(query text) RETURNS text
@@ -485,29 +485,13 @@ $$;
 COMMENT ON FUNCTION episode_num(airdate date) IS
 'Converts a date to a season and episode number.';
 
-CREATE FUNCTION episode_num(season smallint, episode smallint) RETURNS episode_num
+CREATE FUNCTION episode_num(season integer, episode integer) RETURNS episode_num
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT ((season << 9) + episode)::episode_num;
 $$;
 
-COMMENT ON FUNCTION episode_num(season smallint, episode smallint) IS
-'Encodes the season and episode into an episode_num (smallint)';
-
-CREATE FUNCTION episode_num(season integer, episode integer) RETURNS episode_num
-LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
-  SELECT ((season::smallint << 9) + episode::smallint)::gs.episode_num;
-$$;
-
 COMMENT ON FUNCTION episode_num(season integer, episode integer) IS
 'Encodes the season and episode into an episode_num (smallint)';
-
-CREATE FUNCTION episode_part_modified() RETURNS trigger
-LANGUAGE plpgsql AS $$
-  BEGIN
-  UPDATE gs.episodes SET modified = now() WHERE id = NEW.episode;
-  RETURN NEW;
-  END;
-$$;
 
 CREATE FUNCTION fts() RETURNS trigger
 LANGUAGE plpgsql AS $$
@@ -525,15 +509,18 @@ COMMENT ON FUNCTION fts() IS
 'Make sure the full text search (FTS) vector is updated for the search index whenever a change is'
 || ' made to the headline.';
 
-CREATE FUNCTION hack_favicon() RETURNS void
-LANGUAGE sql LEAKPROOF AS $$
-  UPDATE headlines
-    SET favicon = array_to_string(regexp_matches(reify_url(https, url)::text,
+CREATE FUNCTION favicon() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+  BEGIN
+  IF NEW.favicon IS NULL OR NEW.favicon IN ('', 'favicon.ico') THEN
+    NEW.favicon := array_to_string(regexp_matches(reify_url(NEW.https, NEW.url)::text,
         '^https?://[^/]+/')::text[], ''::text) || 'favicon.ico'
-    WHERE favicon IS NULL OR favicon = 'favicon.ico';
+  END IF;
+  return NEW;
+  END
 $$;
 
-COMMENT ON FUNCTION hack_favicon() IS
+COMMENT ON FUNCTION favicon() IS
 'Convert relative favicon URLs to fully qualified URLs.';
 
 CREATE FUNCTION headlines(since interval DEFAULT '7 days'::interval,
@@ -547,7 +534,7 @@ CREATE FUNCTION headlines(since interval DEFAULT '7 days'::interval,
                           teaser_image text, favicon text, tags character varying[])
 LANGUAGE sql STABLE STRICT LEAKPROOF AS $$
   WITH ts AS (SELECT length(querytext) > 0 AS has_query,
-                     gs.to_tsquery('english', querytext) AS query, now() - since AS cutoff)
+                     format_query(querytext) AS query, now() - since AS cutoff)
   (SELECT id, ts_rank(fts, ts.query) * rank_modifier(added) as rank, added::date,
           metadata->>'type', source, title, reify_url(https, url), description, discussion,
           metadata->>'locale', teaser_image, favicon, labels
@@ -585,12 +572,17 @@ COMMENT ON FUNCTION headlines_as_json(since interval, query text, min_rank real,
                                       oset integer) IS
 'Browse and search incoming news headlines, returning them as JSON.';
 
+CREATE FUNCTION http(ts timestamp with time zone) RETURNS text
+LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
+  SELECT http(ts::timestamp);
+$$;
+
 CREATE FUNCTION http(ts timestamp without time zone) RETURNS text
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT to_char(ts, 'Dy, DD Mon YYYY HH24:MI:SS');
 $$;
 
-CREATE FUNCTION http_timestamp(ts text) RETURNS timestamp without time zone
+CREATE FUNCTION http(ts text) RETURNS timestamp without time zone
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT to_timestamp(ts, 'Dy, DD Mon YYYY HH24:MI:SS')::timestamp without time zone;
 $$;
@@ -776,8 +768,8 @@ COMMENT ON FUNCTION register(email character varying, ip inet, user_agent charac
 Note: the person must be given the correct ACLs to perform most actions.';
 
 CREATE FUNCTION source(source character varying, url character varying) RETURNS character varying
-LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
-  SELECT coalesce(source, regexp_replace(url, '^https?://(?:www\.)?([^/]+)/.+$', '\1'));
+LANGUAGE sql IMMUTABLE LEAKPROOF AS $$
+  SELECT coalesce(source, regexp_replace(url, '^(?:https?:)?//(?:www\.)?([^/]+)/.+$', '\1'), "Unknown");
 $$;
 
 COMMENT ON FUNCTION source(source character varying, url character varying) IS
@@ -790,23 +782,24 @@ LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
     FROM record(id);
 $$;
 
-COMMENT ON FUNCTION text(id episode_num) IS
+COMMENT ON FUNCTION episode_as_text(id episode_num) IS
 'Converts an encoded episode number (episode_no/smallint) to a user-readable string in the form
  "s16e04b" where the previous signifies season 16 (2016), episode 4 (week 4), slot b (third slot).';
 
-CREATE FUNCTION to_tsquery(dict regconfig, query text) RETURNS tsquery
+CREATE FUNCTION format_query(query text, dict regconfig DEFAULT 'english'::regconfig)
+RETURNS tsquery
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   WITH raw_query AS
     (SELECT regexp_matches(replace(replace(replace(replace(query, 'title:', 'A:'), 'description:', 'B:'), 'site:', 'C:'), 'content:', 'D:'), '(\(?)\s*(?:(\w):)?(-?)([a-z0-9][-a-z0-9]+)\s*(\)?)\s*([&|]{0,2})\s*', 'ig') as tokens)
-  SELECT to_tsquery('english'::regconfig,
+  SELECT to_tsquery(dict,
                     rtrim(string_agg(concat(tokens[1], coalesce(nullif(tokens[3], '-'), '!'),
                                             tokens[4], ':' || nullif(tokens[2], 'ABCD'), tokens[5],
                                             coalesce(nullif(tokens[6], ''), '&')),''),'&'))
     FROM raw_query;
 $$;
 
-COMMENT ON FUNCTION to_tsquery(dict regconfig, query text) IS
-'Sanitizes input to allow easier boolean searches';
+COMMENT ON FUNCTION format_query(query text, dict regconfig) IS
+'Sanitizes input to allow easier boolean searches. Takes an optional dictionary configuration.';
 
 CREATE FUNCTION update_password(email character varying, old_pass character varying,
                                 new_pass character varying) RETURNS void
