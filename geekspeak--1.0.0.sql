@@ -2,12 +2,26 @@
 -- geekspeak PostgreSQL extension
 -- Miles Elam <miles@geekspeak.org>
 --
--- Depends on audit
---            plpgsql
+-- Depends on plpgsql
 -- ---------------------------------------------------------------------------
 
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
 \echo Use "CREATE EXTENSION geekspeak" to load this file. \quit
+
+CREATE TABLE entities (
+    created timestamp with time zone DEFAULT now() NOT NULL,
+    modified timestamp with time zone DEFAULT now() NOT NULL
+);
+
+COMMENT ON TABLE entities IS
+'Common features of tables related to modification and creation times.';
+
+COMMENT ON COLUMN entities.created IS
+'When the entity was created, relative to the US Pacific timezone.';
+
+COMMENT ON COLUMN entities.modified IS
+'When the entity was last updated, relative to the US Pacific timezone. When the entity is first
+ created, it holds the same value as "created".';
 
 --
 -- Created as a domain to make it easier to identify when being used
@@ -18,7 +32,6 @@ CREATE DOMAIN episode_num AS smallint;
 -- Show roles. Some are defunct due to the loss of KUSP, but kept for historical lookup.
 --
 CREATE TYPE role AS ENUM (
-    'denied',
     'authenticated',
     'superuser',
     'host',
@@ -26,8 +39,7 @@ CREATE TYPE role AS ENUM (
     'onair',
     'offair',
     'guest',
-    'audience',
-    'phones',
+    'screener',
     'patron'
 );
 
@@ -38,22 +50,20 @@ COMMENT ON TYPE role IS
 -- Formerly known as users. Using the term "people" and "person" since "user" is overloaded.
 --
 CREATE TABLE people (
-    id integer NOT NULL PRIMARY KEY,
+    id serial NOT NULL PRIMARY KEY,
     email character varying(126) NOT NULL UNIQUE,
-    encrypted_password character(60) NOT NULL CHECK (length(encrypted_password) = 60),
-    created timestamp without time zone DEFAULT now() NOT NULL,
+    encrypted_password character(60) CHECK (length(encrypted_password) = 60),
     display_name character varying(126),
     bio text,
     description character varying(126),
-    acls role[] DEFAULT '{}'::role[] NOT NULL,
-    modified timestamp without time zone DEFAULT now() NOT NULL
-);
+    acls role[]
+) INHERITS (entities) WITH (OIDS = FALSE);
 
 COMMENT ON TABLE people IS
 'Formerly known as users. Using the term "people" and "person" since not all those listed will
  directly access the system. Also "user" is such an overloaded term, it does not hurt to avoid
- keyword collisions. To prevent someone from logging in without deleting their account, add the
- role "denied" to the acls array.';
+ keyword collisions. To prevent someone from logging in without deleting their account, set the
+ acls array to NULL.';
 
 COMMENT ON COLUMN people.encrypted_password IS
 'Salted Blowfish. Access through gs.login(email, password, IP, user agent), not directly.';
@@ -70,13 +80,12 @@ COMMENT ON COLUMN people.description IS
 CREATE TABLE sessions (
     nonce uuid NOT NULL PRIMARY KEY,
     person integer NOT NULL FOREIGN KEY REFERENCES people(id) ON UPDATE CASCADE ON DELETE RESTRICT,
-    created timestamp without time zone DEFAULT now() NOT NULL,
     expires timestamp without time zone
         DEFAULT (now() + (current_setting('gs.session_duration'::text))::interval) NOT NULL,
     for_reset boolean DEFAULT false NOT NULL,
     ips inet[] NOT NULL,
     user_agent character varying DEFAULT ''::character varying NOT NULL
-);
+) INHERITS (entities) WITH (OIDS = FALSE);
 
 ALTER TABLE ONLY sessions
     ADD CONSTRAINT sessions_similarity_gist EXCLUDE
@@ -102,7 +111,7 @@ COMMENT ON COLUMN sessions.user_agent IS
 --
 -- Current logins
 --
-CREATE VIEW user_sessions AS
+CREATE VIEW active_sessions AS
   SELECT p.id AS user_id, s.nonce, p.email, p.created AS user_registered,
          s.created AS session_created, s.expires AS session_expires,
          (now() - (s.created)::timestamp with time zone) AS logged_in_time, s.for_reset,
@@ -110,9 +119,9 @@ CREATE VIEW user_sessions AS
          (p.encrypted_password IS NOT NULL) AS has_password
     FROM people p
     LEFT JOIN sessions s ON ((p.id = s.person))
-    WHERE ((s.expires > now()) AND (NOT (p.acls @> '{denied}'::role[])));
+    WHERE ((s.expires > now()) AND (p.acls IS NOT NULL));
 
-COMMENT ON VIEW user_sessions IS
+COMMENT ON VIEW active_sessions IS
 'Simplified view to see who is logged in, how long they''ve been logged in, and what client
  they''re using. Password and ACLs omitted.';
 
@@ -146,22 +155,21 @@ COMMENT ON COLUMN locations.nickname IS
 --
 CREATE TABLE episodes (
     id serial NOT NULL PRIMARY KEY,
+    published timestamp without time zone,
+    recorded tstzrange NOT NULL,
+    location smallint NOT NULL
+        FOREIGN KEY REFERENCES locations(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+    num episode_num NOT NULL UNIQUE,
+    guid_override uuid,
     title character varying(126),
     promo text,
     description text,
-    num episode_num NOT NULL UNIQUE,
-    created timestamp with time zone DEFAULT now() NOT NULL,
     transcript text,
-    published timestamp without time zone,
     tags character varying(45)[],
     fts tsvector NOT NULL,
     bit_order integer[],
-    location smallint NOT NULL
-        FOREIGN KEY REFERENCES locations(id) ON UPDATE CASCADE ON DELETE RESTRICT,
-    recording tstzrange NOT NULL,
-    content text,
-    modified timestamp without time zone DEFAULT now() NOT NULL
-);
+    content text
+) INHERITS (entities) WITH (OIDS = FALSE);
 
 COMMENT ON TABLE episodes IS
 'Radio show and podcast episodes.';
@@ -192,10 +200,8 @@ CREATE TABLE participants (
         FOREIGN KEY REFERENCES episodes(id) ON UPDATE CASCADE ON DELETE CASCADE,
     person integer NOT NULL FOREIGN KEY REFERENCES people(id) ON UPDATE CASCADE ON DELETE RESTRICT,
     roles role[] NOT NULL,
-    created timestamp without time zone DEFAULT now() NOT NULL,
-    modified timestamp without time zone DEFAULT now() NOT NULL,
     UNIQUE(episode, person)
-);
+) INHERITS (entities) WITH (OIDS = FALSE);
 
 CREATE INDEX episodes_published_idx ON episodes USING btree (published DESC NULLS LAST);
 
@@ -203,19 +209,22 @@ CREATE INDEX sessions_expires_for_reset_idx ON sessions USING btree (expires DES
 
 CREATE TABLE headlines (
     id serial NOT NULL PRIMARY KEY,
-    source character varying(100) NOT NULL,
+    source character varying(126) NOT NULL,
+    author character varying(126),
     https boolean DEFAULT false NOT NULL,
     url text NOT NULL UNIQUE,
-    title character varying(128) NOT NULL,
+    locale character varying(5) NOT NULL DEFAULT 'en',
+    title character varying(126) NOT NULL DEFAULT 'UNTITLED',
     description text,
     metadata jsonb NOT NULL,
     discussion text,
-    labels character varying(100)[],
+    labels character varying(50)[],
     added timestamp without time zone DEFAULT now() NOT NULL,
     fts tsvector,
     archived timestamp without time zone,
     teaser_image text,
     content text,
+    content_type character varying(15) DEFAULT 'article',
     summary text,
     favicon text
 );
@@ -275,11 +284,23 @@ CREATE TABLE bit_templates (
     read_only_message text,
     "order" real DEFAULT 0 NOT NULL,
     modified timestamp without time zone DEFAULT now() NOT NULL
-);
+) INHERITS (entities) WITH (OIDS = FALSE);
 
 COMMENT ON TABLE bit_templates IS
 'Some of the bits are recurrent parts of the script and thus need to be reproduced and updated for
  each episode. The title and description may be Mustache templates, e.g., {{some_value}}.';
+
+COMMENT ON COLUMN bit_templates.title IS
+'Script header.';
+
+COMMENT ON COLUMN bit_templates.description IS
+'Script content.';
+
+COMMENT ON COLUMN bit_templates.read_only_message IS
+'Script immutable content.';
+
+COMMENT ON COLUMN bit_templates."order" IS
+'Script content order.';
 
 CREATE TABLE bits (
     id serial NOT NULL PRIMARY KEY,
@@ -287,15 +308,13 @@ CREATE TABLE bits (
     description text,
     headline integer FOREIGN KEY REFERENCES headlines(id) ON UPDATE CASCADE ON DELETE RESTRICT,
     owner integer NOT NULL FOREIGN KEY REFERENCES people(id) ON UPDATE CASCADE ON DELETE RESTRICT,
-    created timestamp without time zone DEFAULT now() NOT NULL,
     episode integer FOREIGN KEY REFERENCES episodes(id) ON UPDATE CASCADE ON DELETE RESTRICT,
     isbn public.ean13,
     public boolean DEFAULT true NOT NULL,
     reference_default smallint
         FOREIGN KEY REFERENCES bit_templates(id) ON UPDATE CASCADE ON DELETE SET NULL,
-    fts tsvector,
-    modified timestamp without time zone DEFAULT now() NOT NULL
-);
+    fts tsvector
+) INHERITS (entities) WITH (OIDS = FALSE);
 
 COMMENT ON TABLE bits IS
 'Bits of an episodes ranging from show script items to blurbs to news headlines.';
@@ -379,7 +398,7 @@ LANGUAGE sql STRICT LEAKPROOF AS $$-- Keep the session going either way
         AND expires > (now() - (current_setting('gs.session_duration')::interval / 2));
 
   -- Find out if authorized and when the session goes away
-  SELECT (NOT acls @> '{denied}'::role[]
+  SELECT (acls IS NOT NULL
              AND (acls || '{authenticated}'::role[])
                  && ARRAY['superuser'::role,requirement]) AS authorized,
       nullif(session_expires, now() + current_setting('gs.session_duration')::interval)
@@ -434,7 +453,7 @@ LANGUAGE sql STRICT AS $$
                       AND for_reset = true
                       AND expires > now()
                       AND ips[1] = ip)
-       AND NOT acls @> ARRAY['denied'::role];
+       AND acls IS NOT NULL;
 
   -- Extend the session timeout and return the user data, but keep the nonce separate since it is
   -- a session id, not data
@@ -493,21 +512,20 @@ $$;
 COMMENT ON FUNCTION episode_num(season integer, episode integer) IS
 'Encodes the season and episode into an episode_num (smallint)';
 
-CREATE FUNCTION fts() RETURNS trigger
+CREATE FUNCTION episodes_fts() RETURNS trigger
 LANGUAGE plpgsql AS $$
   BEGIN
   NEW.fts :=
     setweight(to_tsvector((new.title)::text), 'A') ||
     setweight(to_tsvector(coalesce((new.description)::text, '')), 'B') ||
-    setweight(to_tsvector((new.source)::text), 'C') ||
-    setweight(to_tsvector(coalesce(new.content, '')), 'D');
+    setweight(to_tsvector((new.content)::text), 'C');
   return NEW;
   END
 $$;
 
-COMMENT ON FUNCTION fts() IS
+COMMENT ON FUNCTION episodes_fts() IS
 'Make sure the full text search (FTS) vector is updated for the search index whenever a change is'
-|| ' made to the headline.';
+|| ' made to the episode.';
 
 CREATE FUNCTION favicon() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$
@@ -572,6 +590,22 @@ COMMENT ON FUNCTION headlines_as_json(since interval, query text, min_rank real,
                                       oset integer) IS
 'Browse and search incoming news headlines, returning them as JSON.';
 
+CREATE FUNCTION headlines_fts() RETURNS trigger
+LANGUAGE plpgsql AS $$
+  BEGIN
+  NEW.fts :=
+    setweight(to_tsvector((new.title)::text), 'A') ||
+    setweight(to_tsvector(coalesce((new.description)::text, '')), 'B') ||
+    setweight(to_tsvector((new.source)::text), 'C') ||
+    setweight(to_tsvector(coalesce(new.content, '')), 'D');
+  return NEW;
+  END
+$$;
+
+COMMENT ON FUNCTION headlines_fts() IS
+'Make sure the full text search (FTS) vector is updated for the search index whenever a change is'
+|| ' made to the headline.';
+
 CREATE FUNCTION http(ts timestamp with time zone) RETURNS text
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT http(ts::timestamp);
@@ -598,7 +632,7 @@ LANGUAGE sql STRICT LEAKPROOF AS $$
          LEFT JOIN (SELECT nonce, person
                       FROM sessions
                       WHERE expires > now() AND user_agent = agent) AS s ON p.id = s.person
-         WHERE email = email AND NOT acls @> array['denied'::role]
+         WHERE email = email AND acls IS NOT NULL
                AND encrypted_password = crypt(plain_password, encrypted_password))
       ON CONFLICT (nonce) DO UPDATE
           SET ips = gs.add_ip(gs.sessions.ips, ip),
@@ -685,7 +719,7 @@ LANGUAGE plpgsql STRICT LEAKPROOF AS $$
     FROM (SELECT email, display_name, description, bio
             FROM people p, sessions s
             WHERE nonce = nonce AND p.id = s.person AND expires > now()
-                  AND NOT p.acls @> array['denied'::role]) userdata;
+                  AND p.acls IS NOT NULL) userdata;
 
   IF result IS NOT NULL THEN
     UPDATE sessions
@@ -745,7 +779,7 @@ LANGUAGE sql STABLE STRICT AS $$
   INSERT INTO sessions (nonce, person, for_reset, ips)
     (SELECT gen_random_uuid(), id, true, array[ip]
        FROM people
-       WHERE email = email and not acls @> '{"denied"}'::role[]);
+       WHERE email = email and acls IS NOT NULL);
 $$;
 
 COMMENT ON FUNCTION recover(email character varying, ip inet, user_agent character varying) IS
@@ -801,16 +835,17 @@ $$;
 COMMENT ON FUNCTION format_query(query text, dict regconfig) IS
 'Sanitizes input to allow easier boolean searches. Takes an optional dictionary configuration.';
 
-CREATE FUNCTION update_password(email character varying, old_pass character varying,
-                                new_pass character varying) RETURNS void
+CREATE FUNCTION update_password(email_addr character varying, old_pass character varying,
+                                new_pass character varying) RETURNS character varying
 LANGUAGE sql STABLE STRICT LEAKPROOF AS $$
   UPDATE people
     SET encrypted_password = crypt(new_pass, gen_salt('bf', 10))
-    WHERE email = email AND encrypted_password = crypt(old_pass, encrypted_password)
-          AND validate_password(new_pass);
+    WHERE email = email_addr AND encrypted_password = crypt(old_pass, encrypted_password)
+          AND validate_password(new_pass)
+    RETURNING email;
 $$;
 
-COMMENT ON FUNCTION update_password(email character varying, old_pass character varying,
+COMMENT ON FUNCTION update_password(email_addr character varying, old_pass character varying,
                                     new_pass character varying) IS
 'Update the password by successfully authenticating with email and old password first. New password
  is subject to password validation as well.';
@@ -887,43 +922,31 @@ CREATE FOREIGN TABLE episode_media_fdt (
     pattern '{basename}.{filetype}',
     root_dir '/var/www/html/media');
 
-CREATE TRIGGER bit_templates_audit AFTER INSERT OR DELETE OR UPDATE ON bit_templates
-  FOR EACH ROW EXECUTE PROCEDURE audit();
+CREATE TRIGGER headlines_fulltextsearch BEFORE UPDATE ON headlines
+  FOR EACH ROW EXECUTE PROCEDURE headlines_fts();
+
+CREATE TRIGGER episodes_fulltextsearch BEFORE UPDATE ON headlines
+  FOR EACH ROW EXECUTE PROCEDURE episodes_fts();
 
 CREATE TRIGGER bit_templates_modified BEFORE UPDATE ON bit_templates
   FOR EACH ROW EXECUTE PROCEDURE modified();
-
-CREATE TRIGGER bits_audit AFTER INSERT OR DELETE OR UPDATE ON bits
-  FOR EACH ROW EXECUTE PROCEDURE audit();
 
 CREATE TRIGGER bits_episode_modified AFTER INSERT OR DELETE OR UPDATE ON bits
   FOR EACH ROW EXECUTE PROCEDURE episode_part_modified();
 
 CREATE TRIGGER bits_modified BEFORE UPDATE ON bits FOR EACH ROW EXECUTE PROCEDURE modified();
 
-CREATE TRIGGER episodes_audit AFTER INSERT OR DELETE OR UPDATE ON episodes
-  FOR EACH ROW EXECUTE PROCEDURE audit();
-
 CREATE TRIGGER episodes_modified BEFORE UPDATE ON episodes
   FOR EACH ROW EXECUTE PROCEDURE modified();
 
-CREATE TRIGGER locations_audit AFTER INSERT OR DELETE OR UPDATE ON locations
-  FOR EACH ROW EXECUTE PROCEDURE audit();
-
 CREATE TRIGGER locations_modified BEFORE UPDATE ON locations
   FOR EACH ROW EXECUTE PROCEDURE modified();
-
-CREATE TRIGGER participants_audit AFTER INSERT OR DELETE OR UPDATE ON participants
-  FOR EACH ROW EXECUTE PROCEDURE audit();
 
 CREATE TRIGGER participants_episode_modified AFTER INSERT OR DELETE OR UPDATE ON participants
   FOR EACH ROW EXECUTE PROCEDURE episode_part_modified();
 
 CREATE TRIGGER participants_modified BEFORE UPDATE ON participants
   FOR EACH ROW EXECUTE PROCEDURE modified();
-
-CREATE TRIGGER people_audit AFTER INSERT OR DELETE OR UPDATE ON people
-  FOR EACH ROW EXECUTE PROCEDURE audit();
 
 CREATE TRIGGER people_modified BEFORE UPDATE ON people
   FOR EACH ROW EXECUTE PROCEDURE modified();

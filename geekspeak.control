@@ -1,6 +1,5 @@
 # geekspeak extension
 comment = 'GeekSpeak podcast schema (https://geekspeak.org)'
 default_version = '1.0'
-module_pathname = '$libdir/geekspeak'
 relocatable = true
-requires = 'audit, plpgsql'
+requires = 'plpgsql'
