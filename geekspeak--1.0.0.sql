@@ -195,8 +195,7 @@ COMMENT ON COLUMN episodes.transcript IS
 --
 CREATE TABLE participants (
     id smallserial NOT NULL PRIMARY KEY,
-    episode integer NOT NULL
-        FOREIGN KEY REFERENCES episodes(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    episode integer NOT NULL REFERENCES episodes(id) ON UPDATE CASCADE ON DELETE CASCADE,
     person integer NOT NULL REFERENCES people(id) ON UPDATE CASCADE ON DELETE RESTRICT,
     roles role[] NOT NULL,
     UNIQUE(episode, person)
