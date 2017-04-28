@@ -1,5 +1,5 @@
 # geekspeak extension
 comment = 'GeekSpeak podcast schema (https://geekspeak.org)'
-default_version = '1.0'
+default_version = '1.0.0'
 relocatable = true
 requires = 'plpgsql'
