@@ -228,8 +228,8 @@ CREATE TABLE headlines (
 );
 
 COMMENT ON TABLE headlines IS
-'Raw article information. Should be purged if deemed sufficiently old and not incorporated into an'
-|| ' episode.';
+'Raw article information. Should be purged if deemed sufficiently old and not incorporated into an
+ episode.';
 
 COMMENT ON COLUMN headlines.source IS
 'e.g., New York Times, Wired, BBC';
@@ -253,8 +253,8 @@ COMMENT ON COLUMN headlines.archived IS
 'If a link goes dead, reference the last archive.org grab.';
 
 COMMENT ON COLUMN headlines.metadata IS
-'Raw headline information. Dumping ground for any extra info that doesn''t need direct reference'
-|| ' from queries.';
+'Raw headline information. Dumping ground for any extra info that doesn''t need direct reference
+ from queries.';
 
 COMMENT ON COLUMN headlines.https IS
 'Whether a secure URL is available';
@@ -471,8 +471,8 @@ LANGUAGE sql STRICT AS $$
 $$;
 
 COMMENT ON FUNCTION confirm(nonce uuid, plain_password character varying, ip inet) IS
-'Confirming valid email address and setting new password. Session is marked no longer for reset,'
-|| ' and the expiry is pushed out.';
+'Confirming valid email address and setting new password. Session is marked no longer for reset,
+ and the expiry is pushed out.';
 
 CREATE FUNCTION episode_as_json(episode episode_num, lastmod timestamp without time zone,
                                 OUT json jsonb, OUT modified timestamp without time zone)
@@ -521,8 +521,8 @@ LANGUAGE plpgsql AS $$
 $$;
 
 COMMENT ON FUNCTION episodes_fts() IS
-'Make sure the full text search (FTS) vector is updated for the search index whenever a change is'
-|| ' made to the episode.';
+'Make sure the full text search (FTS) vector is updated for the search index whenever a change is
+ made to the episode.';
 
 CREATE FUNCTION favicon() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$
@@ -600,8 +600,8 @@ LANGUAGE plpgsql AS $$
 $$;
 
 COMMENT ON FUNCTION headlines_fts() IS
-'Make sure the full text search (FTS) vector is updated for the search index whenever a change is'
-|| ' made to the headline.';
+'Make sure the full text search (FTS) vector is updated for the search index whenever a change is
+ made to the headline.';
 
 CREATE FUNCTION http(ts timestamp with time zone) RETURNS text
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
@@ -642,9 +642,9 @@ $$;
 
 COMMENT ON FUNCTION login(email character varying, plain_password character varying, ip inet,
                           agent character varying) IS
-'Authenticate the user by email, password. IP address and user agent are saved as part of the'
-|| ' session. Return a session ID/nonce on successful login. Logins from the same user on the'
-|| ' same browser will reuse an existing valid session to avoid session bloat.';
+'Authenticate the user by email, password. IP address and user agent are saved as part of the
+ session. Return a session ID/nonce on successful login. Logins from the same user on the
+ same browser will reuse an existing valid session to avoid session bloat.';
 
 CREATE FUNCTION logout(nonce uuid, ip inet) RETURNS void
 LANGUAGE sql STRICT LEAKPROOF AS $$
@@ -823,9 +823,9 @@ LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   WITH raw_query AS
     (SELECT regexp_matches(replace(replace(replace(replace(query, 'title:', 'A:'), 'description:', 'B:'), 'site:', 'C:'), 'content:', 'D:'), '(\(?)\s*(?:(\w):)?(-?)([a-z0-9][-a-z0-9]+)\s*(\)?)\s*([&|]{0,2})\s*', 'ig') as tokens)
   SELECT to_tsquery(dict,
-                    rtrim(string_agg(concat(tokens[1], coalesce(nullif(tokens[3], '-'), '!'),
-                                            tokens[4], ':' || nullif(tokens[2], 'ABCD'), tokens[5],
-                                            coalesce(nullif(tokens[6], ''), '&')),''),'&'))
+                    rtrim(string_agg(concat(tokens[1],coalesce(nullif(tokens[3],'-'),'!'),
+                                            tokens[4],':',coalesce(nullif(tokens[2],''),'ABCD'),
+                                            tokens[5],coalesce(nullif(tokens[6],''),'&')),''),'&'))
     FROM raw_query;
 $$;
 
