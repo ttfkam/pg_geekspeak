@@ -79,7 +79,7 @@ COMMENT ON COLUMN people.description IS
 --
 CREATE TABLE sessions (
     nonce uuid NOT NULL PRIMARY KEY,
-    person integer NOT NULL FOREIGN KEY REFERENCES people(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+    person integer NOT NULL REFERENCES people(id) ON UPDATE CASCADE ON DELETE RESTRICT,
     expires timestamp without time zone
         DEFAULT (now() + (current_setting('gs.session_duration'::text))::interval) NOT NULL,
     for_reset boolean DEFAULT false NOT NULL,
@@ -157,8 +157,7 @@ CREATE TABLE episodes (
     id serial NOT NULL PRIMARY KEY,
     published timestamp without time zone,
     recorded tstzrange NOT NULL,
-    location smallint NOT NULL
-        FOREIGN KEY REFERENCES locations(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+    location smallint NOT NULL REFERENCES locations(id) ON UPDATE CASCADE ON DELETE RESTRICT,
     num episode_num NOT NULL UNIQUE,
     guid_override uuid,
     title character varying(126),
@@ -198,7 +197,7 @@ CREATE TABLE participants (
     id smallserial NOT NULL PRIMARY KEY,
     episode integer NOT NULL
         FOREIGN KEY REFERENCES episodes(id) ON UPDATE CASCADE ON DELETE CASCADE,
-    person integer NOT NULL FOREIGN KEY REFERENCES people(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+    person integer NOT NULL REFERENCES people(id) ON UPDATE CASCADE ON DELETE RESTRICT,
     roles role[] NOT NULL,
     UNIQUE(episode, person)
 ) INHERITS (entities) WITH (OIDS = FALSE);
@@ -306,13 +305,12 @@ CREATE TABLE bits (
     id serial NOT NULL PRIMARY KEY,
     title character varying(126),
     description text,
-    headline integer FOREIGN KEY REFERENCES headlines(id) ON UPDATE CASCADE ON DELETE RESTRICT,
-    owner integer NOT NULL FOREIGN KEY REFERENCES people(id) ON UPDATE CASCADE ON DELETE RESTRICT,
-    episode integer FOREIGN KEY REFERENCES episodes(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+    headline integer REFERENCES headlines(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+    owner integer NOT NULL REFERENCES people(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+    episode integer REFERENCES episodes(id) ON UPDATE CASCADE ON DELETE RESTRICT,
     isbn public.ean13,
     public boolean DEFAULT true NOT NULL,
-    reference_default smallint
-        FOREIGN KEY REFERENCES bit_templates(id) ON UPDATE CASCADE ON DELETE SET NULL,
+    reference_default smallint REFERENCES bit_templates(id) ON UPDATE CASCADE ON DELETE SET NULL,
     fts tsvector
 ) INHERITS (entities) WITH (OIDS = FALSE);
 

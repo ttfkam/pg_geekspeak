@@ -2,10 +2,8 @@
 --  Test geekspeak extension
 --
 
-CREATE EXTENSION geekspeak;  -- fail, must install audit and plpgsql first
-CREATE EXTENSION plpgsql;
-CREATE EXTENSION geekspeak;  -- fail, must install audit and plpgsql first
-CREATE EXTENSION audit;
+--CREATE EXTENSION geekspeak;  -- fail, must install plpgsql first
+--CREATE EXTENSION plpgsql;
 CREATE EXTENSION geekspeak;
 
 --
