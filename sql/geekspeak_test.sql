@@ -38,11 +38,14 @@ SELECT c.person, c.nonce IS NOT NULL
 -- Verify only active logins
 --
 
--- 0 pending registrations or expired sessions
-SELECT count(*) FROM sessions WHERE for_reset = true OR expires < now();
+-- Unconfirmed sessions
+SELECT count(*) FROM sessions WHERE for_reset = true;
 
--- 1 active session
-SELECT count(*) FROM sessions WHERE for_reset = false AND expires > now();
+-- Expired sessions
+SELECT count(*) FROM sessions WHERE expires < now();
+
+-- Active sessions
+SELECT count(*) FROM sessions WHERE for_reset = false AND expires >= now();
 
 --
 -- Bad login: wrong password
@@ -67,11 +70,20 @@ SELECT logout(nonce, '10.2.4.6')
 -- Verify active logins
 --
 
--- 1 expired session
-SELECT count(*) FROM sessions WHERE for_reset = true OR expires < now();
+-- Unconfirmed sessions
+SELECT count(*) FROM sessions WHERE for_reset = true;
 
--- 0 active sessions
-SELECT count(*) FROM sessions WHERE for_reset = false AND expires > now();
+-- Expired sessions
+SELECT count(*) FROM sessions WHERE expires < now();
+
+-- Active sessions
+SELECT count(*) FROM sessions WHERE for_reset = false AND expires >= now();
+
+--
+-- Log back in
+--
+
+SELECT login('test@example.com', 'TestPassword1$', '10.1.2.3', 'Test Agent') IS NOT NULL;
 
 --
 -- Add news items
@@ -103,7 +115,7 @@ SELECT add_headline_bit(
    "og_locale": "en-US",
    "shortcut_icon": "/favicon.png"
  }'::json,
- (SELECT nonce FROM sessions LIMIT 1));
+ (SELECT nonce FROM sessions WHERE expires > now() LIMIT 1));
 
 --
 -- Utility functions used by clients
@@ -119,6 +131,8 @@ SELECT http('Fri, 01 Apr 2016 16:20:00');
 
 SELECT add_ip('{"127.0.0.1", "127.0.0.2", "127.0.0.3"}'::inet[], '127.0.0.1'::inet);
 
+SELECT add_ip('{"127.0.0.1", "127.0.0.2", "127.0.0.3"}'::inet[], '127.0.0.3'::inet);
+
 SELECT add_ip('{"127.0.0.1", "127.0.0.2", "127.0.0.3"}'::inet[], '127.0.0.4'::inet);
 
 SELECT episode_num(16, 12);
@@ -131,15 +145,15 @@ SELECT mime_type('png'), mime_type('jpg'), mime_type('svgz'), mime_type('mp3');
 
 SELECT * FROM record(8204::episode_num);
 
-SELECT reify_url(true, '//www.example.com/test/https');
+SELECT reify_url(true, '//www.example.com/test/');
 
-SELECT reify_url(false, '//www.example.com/test/http');
+SELECT reify_url(false, '//www.example.com/test/');
 
 SELECT source('New York Times', 'https://www.nytimes.com/articles/testing');
 
-SELECT source(NULL::varchar, 'https://www.nytimes.com/articles/testing');
+SELECT source(NULL::text, 'https://www.nytimes.com/articles/testing');
 
-SELECT source(NULL::varchar, NULL::varchar);
+SELECT source(NULL::text, NULL::text);
 
 SELECT validate_password('password'), validate_password('PASSWORD'), validate_password('pAsSwOrD'),
        validate_password('passwd'), validate_password('Password9'), validate_password('pA$$w0rd');
