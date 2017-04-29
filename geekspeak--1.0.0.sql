@@ -715,23 +715,19 @@ $$;
 
 CREATE FUNCTION login(email text, plain_password text, ip inet, agent text) RETURNS uuid
 LANGUAGE sql STRICT LEAKPROOF AS $$
-  -- Create a new session
-  WITH auth AS
-    (INSERT INTO sessions (nonce, person, ips, user_agent)
-      (SELECT coalesce(s.nonce, gen_random_uuid()), id, ARRAY[ip], agent
-         FROM people AS p
-         LEFT JOIN (SELECT nonce, person
-                      FROM sessions
-                      WHERE expires > now() AND user_agent = agent) AS s ON p.id = s.person
-         WHERE email = email AND acls IS NOT NULL
-               AND encrypted_password = crypt(plain_password, encrypted_password))
-      ON CONFLICT (nonce) DO UPDATE
-          SET ips = add_ip(sessions.ips, ip),
-              expires = now() + (current_setting('geekspeak.session_duration'::text))::interval
-      RETURNING nonce)
-  -- Return the session id to the user
-  SELECT nonce
-    FROM auth;
+  -- Create a new session or update existing one
+	INSERT INTO sessions (nonce, person, ips, user_agent)
+		(SELECT coalesce(s.nonce, gen_random_uuid()), id, ARRAY[ip], agent
+			FROM people AS p
+			LEFT JOIN sessions AS s ON (s.person = p.id)
+			WHERE (s.expires IS NULL OR s.expires > now())
+				AND (s.user_agent IS NULL OR s.user_agent = agent)
+				AND p.email = email
+				AND p.encrypted_password = crypt(plain_password, p.encrypted_password))
+	ON CONFLICT (nonce) DO UPDATE
+		 SET ips = add_ip(sessions.ips, ip),
+				 expires = now() + (current_setting('geekspeak.session_duration'))::interval
+	RETURNING nonce
 $$;
 
 COMMENT ON FUNCTION login(email text, plain_password text, ip inet, agent text) IS
