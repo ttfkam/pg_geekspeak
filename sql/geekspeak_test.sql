@@ -109,7 +109,7 @@ SELECT add_headline_bit(
 -- Utility functions used by clients
 --
 
-SELECT http('2016-04-01 16:20'::timestamptz AT TIME ZONE 'Pacific');
+SELECT http('2016-04-01 16:20'::timestamptz AT TIME ZONE 'US/Pacific');
 
 SELECT http('Fri, 01 Apr 2016 16:20:00');
 
