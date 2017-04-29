@@ -336,6 +336,14 @@ COMMENT ON COLUMN bits.fts IS
 CREATE UNIQUE INDEX episode_headline_udx ON bits
   USING btree (episode DESC NULLS LAST, headline DESC NULLS LAST);
 
+CREATE FUNCTION source(source text, url text) RETURNS text
+LANGUAGE sql IMMUTABLE LEAKPROOF AS $$
+  SELECT coalesce(source, regexp_replace(url, '^(?:https?:)?//(?:www\.)?([^/]+)/.+$', '\1'), "Unknown");
+$$;
+
+COMMENT ON FUNCTION source(source text, url text) IS
+'Provide a headline''s source either by explicit value or by using the domain name.';
+
 CREATE FUNCTION add_headline_bit(article json, submitter integer) RETURNS integer
 LANGUAGE sql STRICT LEAKPROOF AS $$
   WITH hl AS (
@@ -794,14 +802,6 @@ COMMENT ON FUNCTION register(email character varying, ip inet, user_agent charac
  emailed and used to call gs.confirm(nonce, password, ip_address) to enable access.
 
 Note: the person must be given the correct ACLs to perform most actions.';
-
-CREATE FUNCTION source(source text, url text) RETURNS text
-LANGUAGE sql IMMUTABLE LEAKPROOF AS $$
-  SELECT coalesce(source, regexp_replace(url, '^(?:https?:)?//(?:www\.)?([^/]+)/.+$', '\1'), "Unknown");
-$$;
-
-COMMENT ON FUNCTION source(source text, url text) IS
-'Provide a headline''s source either by explicit value or by using the domain name.';
 
 CREATE FUNCTION text(id episode_num) RETURNS text
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
