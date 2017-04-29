@@ -442,7 +442,7 @@ CREATE FUNCTION bits(ordered_bits integer[], OUT id integer, OUT source characte
 LANGUAGE sql STABLE STRICT LEAKPROOF AS $$
   SELECT b.id, h.source, coalesce(b.title, h.metadata->>'title'),
       coalesce(b.description, h.metadata->>'description'), h.labels,
-      aggregator.reify_url(h.https, h.url) AS url, h.teaser_image, b.isbn, p.email
+      reify_url(h.https, h.url) AS url, h.teaser_image, b.isbn, p.email
     FROM (SELECT unnest(ordered_bits) AS bit,
                  generate_series(1,array_length(ordered_bits, 1)) as row_num) AS bo,
         bits AS b
