@@ -93,7 +93,7 @@ ALTER TABLE ONLY sessions
 
 COMMENT ON TABLE sessions IS
 'Logins and persistent sessions. Note: not all entries are current. Be sure to check the "expires"
- column for validity. To see just current logins, use the view "user_sessions" instead.';
+ column for validity. To see just current logins, use the view "active_sessions" instead.';
 
 COMMENT ON COLUMN sessions.nonce IS
 'Unique 128-bit session ID';
@@ -112,14 +112,21 @@ COMMENT ON COLUMN sessions.user_agent IS
 -- Current logins
 --
 CREATE VIEW active_sessions AS
-  SELECT p.id AS user_id, s.nonce, p.email, p.created AS user_registered,
-         s.created AS session_created, s.expires AS session_expires,
-         (now() - (s.created)::timestamptz) AS logged_in_time, s.for_reset,
-         p.display_name, p.bio, p.description, p.acls, s.ips AS session_ips, s.user_agent,
-         (p.encrypted_password IS NOT NULL) AS has_password
+  SELECT p.id AS person,
+         s.nonce,
+         p.email,
+         p.created AS registration,
+         s.created AS created,
+         s.expires,
+         (now() - (s.created)::timestamptz) AS duration,
+         p.display_name,
+         p.bio,
+         p.description,
+         s.ips,
+         s.user_agent
     FROM people p
-    LEFT JOIN sessions s ON ((p.id = s.person))
-    WHERE ((s.expires > now()) AND (p.acls IS NOT NULL));
+    LEFT JOIN sessions s ON (p.id = s.person)
+    WHERE s.expires > now() AND NOT s.for_reset;
 
 COMMENT ON VIEW active_sessions IS
 'Simplified view to see who is logged in, how long they''ve been logged in, and what client
@@ -337,30 +344,6 @@ COMMENT ON COLUMN bits.fts IS
 CREATE UNIQUE INDEX episode_headline_udx ON bits
   USING btree (episode DESC NULLS LAST, headline DESC NULLS LAST);
 
-CREATE OR REPLACE VIEW user_sessions AS
- SELECT p.id AS user_id,
-    s.nonce,
-    p.email,
-    p.created AS user_registered,
-    s.created AS session_created,
-    s.expires AS session_expires,
-    now() - s.created::timestamptz AS logged_in_time,
-    s.for_reset,
-    p.display_name,
-    p.bio,
-    p.description,
-    p.acls,
-    s.ips AS session_ips,
-    s.user_agent,
-    p.encrypted_password IS NOT NULL AS has_password
-   FROM people p
-     LEFT JOIN sessions s ON p.id = s.person
-  WHERE s.expires > now() AND p.acls IS NOT NULL;
-
-COMMENT ON VIEW user_sessions IS
-'Simplified view to see who is logged in, how long they''ve been logged in, and what client
- they''re using. Password and ACLs omitted.';
-
 CREATE FUNCTION source(source text, url text) RETURNS text
 LANGUAGE sql IMMUTABLE LEAKPROOF AS $$
   SELECT coalesce(source, regexp_replace(url, '^(?:https?:)?//(?:www\.)?([^/]+)/.+$', '\1'));
@@ -415,24 +398,21 @@ $$;
 COMMENT ON FUNCTION add_ip(ips inet[], ip inet) IS
 'Appends a new IP address to a list if the last entry is not the same IP. Note: IPv6-safe.';
 
-CREATE FUNCTION authorize(
-                  session_id uuid, ip inet, client text,
-                  requirement role DEFAULT 'authenticated'::role, OUT authorized boolean,
-                  OUT new_expires timestamptz) RETURNS record
+CREATE FUNCTION authorize(session_id uuid, ip inet, client text,
+                          requirement role DEFAULT 'authenticated'::role) RETURNS boolean
 LANGUAGE sql STRICT LEAKPROOF AS $$-- Keep the session going either way
   UPDATE sessions
     SET expires = now() + (current_setting('geekspeak.session_duration'))::interval,
         ips = add_ip(ips, ip)
-    WHERE nonce = session_id AND user_agent = client AND for_reset = false AND expires > now()
-        AND expires > (now() - (current_setting('geekspeak.session_duration')::interval / 2));
+    WHERE nonce = session_id AND user_agent = client AND for_reset = false AND expires > now();
 
-  -- Find out if authorized and when the session goes away
-  SELECT (acls IS NOT NULL
-             AND (acls || '{authenticated}'::role[])
-                 && ARRAY['superuser'::role,requirement]) AS authorized,
-      nullif(session_expires, now() + current_setting('geekspeak.session_duration')::interval)
-          AS new_expires
-    FROM user_sessions;
+  -- Find out if authorized
+  SELECT coalesce(
+    (SELECT p.acls IS NOT NULL
+            AND ((p.acls || '{authenticated}'::role[]) && ARRAY['superuser'::role, requirement])
+       FROM sessions AS s
+       INNER JOIN people AS p ON (p.id = s.person)
+       WHERE s.nonce = session_id), false);
 $$;
 
 CREATE FUNCTION reify_url(https boolean, url character varying) RETURNS character varying
@@ -713,16 +693,15 @@ LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT to_timestamp(ts, 'Dy, DD Mon YYYY HH24:MI:SS')::timestamp;
 $$;
 
-CREATE FUNCTION login(email text, plain_password text, ip inet, agent text) RETURNS uuid
+CREATE OR REPLACE FUNCTION login(email text, plain_password text, ip inet, agent text) RETURNS uuid
 LANGUAGE sql STRICT LEAKPROOF AS $$
   -- Create a new session or update existing one
 	INSERT INTO sessions (nonce, person, ips, user_agent)
 		(SELECT coalesce(s.nonce, gen_random_uuid()), id, ARRAY[ip], agent
 			FROM people AS p
-			LEFT JOIN sessions AS s ON (s.person = p.id)
-			WHERE (s.expires IS NULL OR s.expires > now())
-				AND (s.user_agent IS NULL OR s.user_agent = agent)
-				AND p.email = email
+			LEFT JOIN (SELECT nonce, person FROM sessions
+			           WHERE expires > now() AND user_agent = agent) AS s ON (s.person = p.id)
+			WHERE p.email = email
 				AND p.encrypted_password = crypt(plain_password, p.encrypted_password))
 	ON CONFLICT (nonce) DO UPDATE
 		 SET ips = add_ip(sessions.ips, ip),
@@ -735,10 +714,10 @@ COMMENT ON FUNCTION login(email text, plain_password text, ip inet, agent text) 
  session. Return a session ID/nonce on successful login. Logins from the same user on the
  same browser will reuse an existing valid session to avoid session bloat.';
 
-CREATE FUNCTION logout(nonce uuid, ip inet) RETURNS void
+CREATE FUNCTION logout(session_id uuid, ip inet) RETURNS void
 LANGUAGE sql STRICT LEAKPROOF AS $$
   UPDATE sessions SET expires = now() - interval '1 second', ips = add_ip(ips, ip)
-    WHERE nonce = nonce;
+    WHERE nonce = session_id;
 $$;
 
 COMMENT ON FUNCTION logout(nonce uuid, ip inet) IS 'Invalidate the current session.';
