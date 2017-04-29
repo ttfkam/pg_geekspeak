@@ -2,7 +2,7 @@
 -- geekspeak PostgreSQL extension
 -- Miles Elam <miles@geekspeak.org>
 --
--- Depends on btree_gist, pgcrypto, isn, plpgsql
+-- Depends on btree_gist, isn, multicorn, pgcrypto plpgsql
 -- ---------------------------------------------------------------------------
 
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION

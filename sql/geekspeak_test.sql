@@ -2,7 +2,7 @@
 --  Test geekspeak extension
 --
 
-CREATE EXTENSION geekspeak;  -- fail, must install btree_gist, pgcrypto, and isbn first
+CREATE EXTENSION geekspeak;  -- fail, needs btree_gist, isn, multicorn, pgcrypto, and plpgsql
 CREATE EXTENSION geekspeak CASCADE;
 
 --
