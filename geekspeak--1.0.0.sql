@@ -524,6 +524,16 @@ COMMENT ON FUNCTION confirm(nonce uuid, plain_password text, ip inet) IS
 'Confirming valid email address and setting new password. Session is marked no longer for reset,
  and the expiry is pushed out.';
 
+CREATE FUNCTION participants_as_json(episode_num episode_num) RETURNS jsonb
+LANGUAGE sql STABLE STRICT LEAKPROOF AS $$
+  SELECT jsonb_agg(jsonb_build_object('person', u.display_name, 'description', u.description,
+                                      'roles', p.roles))
+    FROM participants as p
+    LEFT JOIN people as u on (p.person = u.id)
+    LEFT JOIN episodes as e on (p.episode = e.id)
+    WHERE e.num = episode_num
+$$;
+
 CREATE FUNCTION episode_as_json(episode episode_num, lastmod timestamp,
                                 OUT json jsonb, OUT modified timestamp)
                                 RETURNS record
@@ -741,16 +751,6 @@ LANGUAGE plpgsql AS $$
   NEW.modified = now();
   RETURN NEW;
   END;
-$$;
-
-CREATE FUNCTION participants_as_json(episode_num episode_num) RETURNS jsonb
-LANGUAGE sql STABLE STRICT LEAKPROOF AS $$
-  SELECT jsonb_agg(jsonb_build_object('person', u.display_name, 'description', u.description,
-                                      'roles', p.roles))
-    FROM participants as p
-    LEFT JOIN people as u on (p.person = u.id)
-    LEFT JOIN episodes as e on (p.episode = e.id)
-    WHERE e.num = episode_num
 $$;
 
 CREATE FUNCTION person(nonce uuid, ip inet) RETURNS jsonb
