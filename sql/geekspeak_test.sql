@@ -4,6 +4,10 @@
 
 --CREATE EXTENSION geekspeak;  -- fail, must install plpgsql first
 --CREATE EXTENSION plpgsql;
+CREATE EXTENSION geekspeak;  -- fail, must install btree_gist first
+CREATE EXTENSION btree_gist;
+CREATE EXTENSION geekspeak;  -- fail, must install pgcrypto first
+CREATE EXTENSION pgcrypto;
 CREATE EXTENSION geekspeak;
 
 --
