@@ -23,16 +23,16 @@ SELECT person, nonce IS NOT NULL
 --
 
 WITH cte AS (SELECT nonce FROM sessions WHERE for_reset = true LIMIT 1)
-SELECT person, nonce IS NOT NULL
-  FROM confirm(cte.nonce, 'TestPassword1', '10.11.12.14');
+SELECT c.person, c.nonce IS NOT NULL
+  FROM cte, confirm(cte.nonce, 'TestPassword1', '10.11.12.14') AS c;
 
 --
 -- Confirm account
 --
 
 WITH cte AS (SELECT nonce FROM sessions WHERE for_reset = true LIMIT 1)
-SELECT person, nonce IS NOT NULL
-  FROM confirm(cte.nonce, 'TestPassword1', '10.11.12.13');
+SELECT c.person, c.nonce IS NOT NULL
+  FROM cte, confirm(cte.nonce, 'TestPassword1', '10.11.12.13') AS c;
 
 --
 -- Verify active logins
