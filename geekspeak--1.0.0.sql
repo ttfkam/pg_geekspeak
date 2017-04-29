@@ -716,7 +716,7 @@ COMMENT ON FUNCTION login(email text, plain_password text, ip inet, agent text) 
 
 CREATE FUNCTION logout(session_id uuid, ip inet) RETURNS void
 LANGUAGE sql STRICT LEAKPROOF AS $$
-  UPDATE sessions SET expires = now() + interval '-1 second', ips = add_ip(ips, ip)
+  UPDATE sessions SET expires = max(created, now() + interval '-1 second'), ips = add_ip(ips, ip)
     WHERE nonce = session_id AND expires > now();
 $$;
 
