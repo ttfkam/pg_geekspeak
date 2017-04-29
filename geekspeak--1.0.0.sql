@@ -9,8 +9,8 @@
 \echo Use "CREATE EXTENSION geekspeak" to load this file. \quit
 
 CREATE TABLE entities (
-    created timestamp DEFAULT now() NOT NULL,
-    modified timestamp DEFAULT now() NOT NULL
+    created timestamptz DEFAULT now() NOT NULL,
+    modified timestamptz DEFAULT now() NOT NULL
 );
 
 COMMENT ON TABLE entities IS
@@ -203,7 +203,8 @@ CREATE TABLE participants (
 
 CREATE INDEX episodes_published_idx ON episodes USING btree (published DESC NULLS LAST);
 
-CREATE INDEX sessions_expires_for_reset_idx ON sessions USING btree (expires DESC NULLS LAST, for_reset NULLS FIRST);
+CREATE INDEX sessions_expires_for_reset_idx ON sessions
+USING btree (expires DESC NULLS LAST, for_reset NULLS FIRST);
 
 CREATE TABLE headlines (
     id serial NOT NULL PRIMARY KEY,
@@ -439,7 +440,9 @@ LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT CASE WHEN https THEN 'https:' ELSE 'http:' END || url;
 $$;
 
-COMMENT ON FUNCTION reify_url(https boolean, url character varying) IS 'Add protocol to a URL. This is necessary because we want http and https to be considered equivalent when determining unique headlines.';
+COMMENT ON FUNCTION reify_url(https boolean, url character varying) IS
+'Add protocol to a URL. This is necessary because we want http and https to be considered
+ equivalent when determining unique headlines.';
 
 CREATE FUNCTION bits(ordered_bits integer[], OUT id integer, OUT source character varying,
                      OUT title character varying, OUT description text,
@@ -534,10 +537,10 @@ LANGUAGE sql STABLE STRICT LEAKPROOF AS $$
     WHERE e.num = episode_num
 $$;
 
-CREATE FUNCTION episode_as_json(episode episode_num, lastmod timestamp,
-                                OUT json jsonb, OUT modified timestamp)
+CREATE FUNCTION episode_as_json(episode episode_num, lastmod timestamptz,
+                                OUT json jsonb, OUT modified timestamptz)
                                 RETURNS record
-LANGUAGE sql STABLE SECURITY DEFINER LEAKPROOF AS $$
+LANGUAGE sql STABLE LEAKPROOF AS $$
   (SELECT jsonb_build_object('episode', num, 'title', title, 'promo', promo,
                              'description', description, 'transcript', transcript,
                              'published', published, 'labels', tags,
@@ -589,7 +592,7 @@ LANGUAGE plpgsql AS $$
   BEGIN
   IF NEW.favicon IS NULL OR NEW.favicon IN ('', 'favicon.ico') THEN
     NEW.favicon := array_to_string(regexp_matches(reify_url(NEW.https, NEW.url)::text,
-        '^https?://[^/]+/')::text[], ''::text) || 'favicon.ico'
+        '^https?://[^/]+/')::text[], ''::text) || 'favicon.ico';
   END IF;
   return NEW;
   END
@@ -597,6 +600,38 @@ $$;
 
 COMMENT ON FUNCTION favicon() IS
 'Convert relative favicon URLs to fully qualified URLs.';
+
+CREATE FUNCTION format_query(query text, dict regconfig DEFAULT 'english'::regconfig)
+RETURNS tsquery
+LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
+  WITH raw_query AS
+    (SELECT regexp_matches(replace(replace(replace(replace(query, 'title:', 'A:'), 'description:', 'B:'), 'site:', 'C:'), 'content:', 'D:'), '(\(?)\s*(?:(\w):)?(-?)([a-z0-9][-a-z0-9]+)\s*(\)?)\s*([&|]{0,2})\s*', 'ig') as tokens)
+  SELECT to_tsquery(dict,
+                    rtrim(string_agg(concat(tokens[1],coalesce(nullif(tokens[3],'-'),'!'),
+                                            tokens[4],':',coalesce(nullif(tokens[2],''),'ABCD'),
+                                            tokens[5],coalesce(nullif(tokens[6],''),'&')),''),'&'))
+    FROM raw_query;
+$$;
+
+COMMENT ON FUNCTION format_query(query text, dict regconfig) IS
+'Sanitizes input to allow easier boolean searches. Takes an optional dictionary configuration.';
+
+CREATE FUNCTION rank_modifier(age interval) RETURNS real
+LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
+  -- 60 seconds * 60 minutes * 24 hours * 7 days
+  SELECT (1 / ceil(extract(epoch from age) / 604800))::real;
+$$;
+
+COMMENT ON FUNCTION rank_modifier(age interval) IS
+'Older stuff should be less likely to show up in search results.';
+
+CREATE FUNCTION rank_modifier(moment timestamptz DEFAULT now()) RETURNS real
+LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
+  SELECT rank_modifier(now() - moment);
+$$;
+
+COMMENT ON FUNCTION rank_modifier(moment timestamptz) IS
+'Older stuff should be less likely to show up in search results.';
 
 CREATE FUNCTION headlines(since interval DEFAULT '7 days'::interval,
                           querytext text DEFAULT ''::text,
@@ -609,7 +644,8 @@ CREATE FUNCTION headlines(since interval DEFAULT '7 days'::interval,
                           teaser_image text, favicon text, tags character varying[])
 LANGUAGE sql STABLE STRICT LEAKPROOF AS $$
   WITH ts AS (SELECT length(querytext) > 0 AS has_query,
-                     format_query(querytext) AS query, now() - since AS cutoff)
+                     format_query(querytext) AS query,
+                     now() - since AS cutoff)
   (SELECT id, ts_rank(fts, ts.query) * rank_modifier(added) as rank, added::date,
           metadata->>'type', source, title, reify_url(https, url), description, discussion,
           metadata->>'locale', teaser_image, favicon, labels
@@ -753,6 +789,14 @@ LANGUAGE plpgsql AS $$
   END;
 $$;
 
+CREATE FUNCTION episode_part_modified() RETURNS trigger
+LANGUAGE plpgsql AS $$
+  BEGIN
+  UPDATE episodes SET modified = now() WHERE id = OLD.episode OR id = NEW.episode;
+  RETURN NEW;
+  END;
+$$;
+
 CREATE FUNCTION person(nonce uuid, ip inet) RETURNS jsonb
 LANGUAGE plpgsql STRICT LEAKPROOF AS $$
   DECLARE
@@ -779,23 +823,6 @@ $$;
 COMMENT ON FUNCTION person(nonce uuid, ip inet) IS
 'Get the person info as json, sanitized for security. This also updates the session info to extend
  the session expiration and record the current ip address.';
-
-CREATE FUNCTION rank_modifier(age interval) RETURNS real
-LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
-  -- 60 seconds * 60 minutes * 24 hours * 7 days
-  SELECT (1 / ceil(extract(epoch from age) / 604800))::real;
-$$;
-
-COMMENT ON FUNCTION rank_modifier(age interval) IS
-'Older stuff should be less likely to show up in search results.';
-
-CREATE FUNCTION rank_modifier(moment timestamp DEFAULT now()) RETURNS real
-LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
-  SELECT rank_modifier(now() - moment);
-$$;
-
-COMMENT ON FUNCTION rank_modifier(moment timestamp) IS
-'Older stuff should be less likely to show up in search results.';
 
 CREATE FUNCTION record(id episode_num) RETURNS TABLE(season smallint, episode smallint)
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
@@ -846,24 +873,9 @@ LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
     FROM record(id);
 $$;
 
-COMMENT ON FUNCTION episode_as_text(id episode_num) IS
+COMMENT ON FUNCTION text(id episode_num) IS
 'Converts an encoded episode number (episode_no/smallint) to a user-readable string in the form
  "s16e04b" where the previous signifies season 16 (2016), episode 4 (week 4), slot b (third slot).';
-
-CREATE FUNCTION format_query(query text, dict regconfig DEFAULT 'english'::regconfig)
-RETURNS tsquery
-LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
-  WITH raw_query AS
-    (SELECT regexp_matches(replace(replace(replace(replace(query, 'title:', 'A:'), 'description:', 'B:'), 'site:', 'C:'), 'content:', 'D:'), '(\(?)\s*(?:(\w):)?(-?)([a-z0-9][-a-z0-9]+)\s*(\)?)\s*([&|]{0,2})\s*', 'ig') as tokens)
-  SELECT to_tsquery(dict,
-                    rtrim(string_agg(concat(tokens[1],coalesce(nullif(tokens[3],'-'),'!'),
-                                            tokens[4],':',coalesce(nullif(tokens[2],''),'ABCD'),
-                                            tokens[5],coalesce(nullif(tokens[6],''),'&')),''),'&'))
-    FROM raw_query;
-$$;
-
-COMMENT ON FUNCTION format_query(query text, dict regconfig) IS
-'Sanitizes input to allow easier boolean searches. Takes an optional dictionary configuration.';
 
 CREATE FUNCTION update_password(email_addr text, old_pass text, new_pass text) RETURNS text
 LANGUAGE sql STABLE STRICT LEAKPROOF AS $$
@@ -886,7 +898,7 @@ CREATE FOREIGN TABLE episode_audio_fdt (
     season smallint NOT NULL,
     episode episode_num NOT NULL,
     filename character varying NOT NULL)
-  SERVER multicorn_fs
+  SERVER gs_multicorn
   OPTIONS (
     filename_column 'filename',
     pattern 's{season}e{episode}.mp3',
@@ -906,7 +918,7 @@ CREATE FOREIGN TABLE episode_files_fdt (
     ext character varying(4) NOT NULL,
     filename character varying NOT NULL,
     content bytea NOT NULL)
-  SERVER multicorn_fs
+  SERVER gs_multicorn
   OPTIONS (
     content_column 'content',
     filename_column 'filename',
@@ -919,7 +931,7 @@ CREATE FOREIGN TABLE episode_intrinsics_fdt (
     filename character varying NOT NULL,
     filetype character varying(4) NOT NULL,
     content bytea NOT NULL)
-  SERVER multicorn_fs
+  SERVER gs_multicorn
   OPTIONS (
     content_column 'content',
     filename_column 'filename',
@@ -931,7 +943,7 @@ CREATE FOREIGN TABLE episode_media_fdt (
     filename character varying NOT NULL,
     filetype character varying(4) NOT NULL,
     content bytea NOT NULL)
-  SERVER multicorn_fs
+  SERVER gs_multicorn
   OPTIONS (
     content_column 'content',
     filename_column 'filename',
