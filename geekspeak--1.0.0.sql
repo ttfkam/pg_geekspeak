@@ -66,7 +66,7 @@ COMMENT ON TABLE people IS
  acls array to NULL.';
 
 COMMENT ON COLUMN people.encrypted_password IS
-'Salted Blowfish. Access through gs.login(email, password, IP, user agent), not directly.';
+'Salted Blowfish. Access through login(email, password, IP, user agent), not directly.';
 
 COMMENT ON COLUMN people.display_name IS
 'How you want to be known to the world.';
@@ -81,7 +81,7 @@ CREATE TABLE sessions (
     nonce uuid NOT NULL PRIMARY KEY,
     person integer NOT NULL REFERENCES people(id) ON UPDATE CASCADE ON DELETE RESTRICT,
     expires timestamptz
-        DEFAULT (now() + (current_setting('gs.session_duration'::text))::interval) NOT NULL,
+        DEFAULT (now() + (current_setting('session_duration'::text))::interval) NOT NULL,
     for_reset boolean DEFAULT false NOT NULL,
     ips inet[] NOT NULL,
     user_agent character varying DEFAULT ''::character varying NOT NULL
@@ -183,7 +183,7 @@ COMMENT ON COLUMN episodes.description IS
 'General description of the episode, formerly known as the abstract.';
 
 COMMENT ON COLUMN episodes.num IS
-'Season and episode number. See: gs.episode_num(season, episode), gs.episode_num(airdate),
+'Season and episode number. See: episode_num(season, episode), episode_num(airdate),
  record(episode_num), and text(episode_num)';
 
 COMMENT ON COLUMN episodes.transcript IS
@@ -420,16 +420,16 @@ CREATE FUNCTION authorize(
                   OUT new_expires timestamptz) RETURNS record
 LANGUAGE sql STRICT LEAKPROOF AS $$-- Keep the session going either way
   UPDATE sessions
-    SET expires = now() + (current_setting('gs.session_duration'))::interval,
+    SET expires = now() + (current_setting('session_duration'))::interval,
         ips = add_ip(ips, ip)
     WHERE nonce = session_id AND user_agent = client AND for_reset = false AND expires > now()
-        AND expires > (now() - (current_setting('gs.session_duration')::interval / 2));
+        AND expires > (now() - (current_setting('session_duration')::interval / 2));
 
   -- Find out if authorized and when the session goes away
   SELECT (acls IS NOT NULL
              AND (acls || '{authenticated}'::role[])
                  && ARRAY['superuser'::role,requirement]) AS authorized,
-      nullif(session_expires, now() + current_setting('gs.session_duration')::interval)
+      nullif(session_expires, now() + current_setting('session_duration')::interval)
           AS new_expires
     FROM user_sessions;
 $$;
@@ -482,8 +482,8 @@ LANGUAGE sql STRICT AS $$
   -- Set the new password, but only if we're expecting confirmation
   UPDATE people SET encrypted_password = crypt(plain_password, gen_salt('bf', 10))
     WHERE id = (SELECT person
-                  FROM gs.sessions
-                  WHERE gs.validate_password(plain_password)
+                  FROM sessions
+                  WHERE validate_password(plain_password)
                       AND nonce = nonce
                       AND for_reset = true
                       AND expires > now()
@@ -494,7 +494,7 @@ LANGUAGE sql STRICT AS $$
   -- a session id, not data
   WITH sess AS (
     UPDATE sessions SET nonce = gen_random_uuid(),
-                        expires = now() + current_setting('gs.session_duration')::interval,
+                        expires = now() + current_setting('session_duration')::interval,
                         for_reset = false
       WHERE nonce = nonce AND ips[1] = ip
       RETURNING nonce, person, ips[1] = ip AS valid_ip)
@@ -669,8 +669,8 @@ LANGUAGE sql STRICT LEAKPROOF AS $$
          WHERE email = email AND acls IS NOT NULL
                AND encrypted_password = crypt(plain_password, encrypted_password))
       ON CONFLICT (nonce) DO UPDATE
-          SET ips = gs.add_ip(gs.sessions.ips, ip),
-              expires = now() + (current_setting('gs.session_duration'::text))::interval
+          SET ips = add_ip(sessions.ips, ip),
+              expires = now() + (current_setting('session_duration'::text))::interval
       RETURNING nonce)
   -- Return the session id to the user
   SELECT nonce
@@ -756,7 +756,7 @@ LANGUAGE plpgsql STRICT LEAKPROOF AS $$
 
   IF result IS NOT NULL THEN
     UPDATE sessions
-      SET expires = now() + current_setting('gs.session_duration')::interval, ips = add_ip(ips, ip)
+      SET expires = now() + current_setting('session_duration')::interval, ips = add_ip(ips, ip)
       WHERE nonce = nonce AND expires > now();
   END IF;
 
@@ -823,7 +823,7 @@ $$;
 
 COMMENT ON FUNCTION register(email text, ip inet, user_agent text) IS
 'Register a new person with the system. It is expected that the new session ID/nonce will be
- emailed and used to call gs.confirm(nonce, password, ip_address) to enable access.
+ emailed and used to call confirm(nonce, password, ip_address) to enable access.
 
 Note: the person must be given the correct ACLs to perform most actions.';
 
