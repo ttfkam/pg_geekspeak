@@ -476,6 +476,18 @@ $$;
 COMMENT ON FUNCTION clean_query(query text) IS
 'Convert the user search query into something the full text search query engine can handle.';
 
+CREATE FUNCTION validate_password(pass text) RETURNS boolean
+LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
+  SELECT length(trim(pass)) >= 8
+         AND pass ~ '[a-z]'
+         AND pass ~ '[A-Z]'
+         AND pass ~ '[0-9]'
+         AND pass ~ '[^a-zA-Z0-9]'
+$$;
+
+COMMENT ON FUNCTION validate_password(pass text) IS
+'Verifies the passwords meets or exceeds minimum strength requirements.';
+
 CREATE FUNCTION confirm(nonce uuid, plain_password text, ip inet)
     RETURNS TABLE(person jsonb, nonce uuid)
 LANGUAGE sql STRICT AS $$
@@ -865,18 +877,6 @@ $$;
 COMMENT ON FUNCTION update_password(email_addr text, old_pass text, new_pass text) IS
 'Update the password by successfully authenticating with email and old password first. New password
  is subject to password validation as well.';
-
-CREATE FUNCTION validate_password(pass text) RETURNS boolean
-LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
-  SELECT length(trim(pass)) >= 8
-         AND pass ~ '[a-z]'
-         AND pass ~ '[A-Z]'
-         AND pass ~ '[0-9]'
-         AND pass ~ '[^a-zA-Z0-9]'
-$$;
-
-COMMENT ON FUNCTION validate_password(pass text) IS
-'Verifies the passwords meets or exceeds minimum strength requirements.';
 
 CREATE SERVER gs_multicorn
   FOREIGN DATA WRAPPER multicorn
