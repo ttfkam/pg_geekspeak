@@ -207,7 +207,7 @@ CREATE INDEX sessions_expires_for_reset_idx ON sessions USING btree (expires DES
 
 CREATE TABLE headlines (
     id serial NOT NULL PRIMARY KEY,
-    source character varying(126) NOT NULL,
+    source character varying(126),
     author character varying(126),
     https boolean DEFAULT false NOT NULL,
     url text NOT NULL UNIQUE,
@@ -338,7 +338,7 @@ CREATE UNIQUE INDEX episode_headline_udx ON bits
 
 CREATE FUNCTION source(source text, url text) RETURNS text
 LANGUAGE sql IMMUTABLE LEAKPROOF AS $$
-  SELECT coalesce(source, regexp_replace(url, '^(?:https?:)?//(?:www\.)?([^/]+)/.+$', '\1'), "Unknown");
+  SELECT coalesce(source, regexp_replace(url, '^(?:https?:)?//(?:www\.)?([^/]+)/.+$', '\1'));
 $$;
 
 COMMENT ON FUNCTION source(source text, url text) IS
@@ -776,7 +776,7 @@ Currently handles:
   episodes 0 - 511 (nine bits, unsigned)
 ';
 
-CREATE FUNCTION recover(email character varying, ip inet, user_agent character varying) RETURNS void
+CREATE FUNCTION recover(email text, ip inet, user_agent text) RETURNS void
 LANGUAGE sql STABLE STRICT AS $$
   INSERT INTO sessions (nonce, person, for_reset, ips)
     (SELECT gen_random_uuid(), id, true, array[ip]
@@ -784,10 +784,10 @@ LANGUAGE sql STABLE STRICT AS $$
        WHERE email = email and acls IS NOT NULL);
 $$;
 
-COMMENT ON FUNCTION recover(email character varying, ip inet, user_agent character varying) IS
+COMMENT ON FUNCTION recover(email text, ip inet, user_agent text) IS
 'Allows password recovery given a person''s email address, IP address, and user agent.';
 
-CREATE FUNCTION register(email character varying, ip inet, user_agent character varying)
+CREATE FUNCTION register(email text, ip inet, user_agent text)
     RETURNS void
 LANGUAGE sql AS $$
   INSERT into people (email, encrypted_password, display_name)
@@ -797,7 +797,7 @@ LANGUAGE sql AS $$
     VALUES(gen_random_uuid(), lastval(), true, ARRAY[ip], now() + interval '1 hour', user_agent);
 $$;
 
-COMMENT ON FUNCTION register(email character varying, ip inet, user_agent character varying) IS
+COMMENT ON FUNCTION register(email text, ip inet, user_agent text) IS
 'Register a new person with the system. It is expected that the new session ID/nonce will be
  emailed and used to call gs.confirm(nonce, password, ip_address) to enable access.
 
