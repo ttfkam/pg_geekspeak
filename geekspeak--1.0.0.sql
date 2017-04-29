@@ -383,7 +383,7 @@ COMMENT ON FUNCTION add_ip(ips inet[], ip inet) IS
 'Appends a new IP address to a list if the last entry is not the same IP. Note: IPv6-safe.';
 
 CREATE FUNCTION authorize(
-                  session_id uuid, ip inet, client character varying,
+                  session_id uuid, ip inet, client text,
                   requirement role DEFAULT 'authenticated'::role, OUT authorized boolean,
                   OUT new_expires timestamp with time zone) RETURNS record
 LANGUAGE sql STRICT LEAKPROOF AS $$-- Keep the session going either way
@@ -437,7 +437,7 @@ $$;
 COMMENT ON FUNCTION clean_query(query text) IS
 'Convert the user search query into something the full text search query engine can handle.';
 
-CREATE FUNCTION confirm(nonce uuid, plain_password character varying, ip inet)
+CREATE FUNCTION confirm(nonce uuid, plain_password text, ip inet)
     RETURNS TABLE(person jsonb, nonce uuid)
 LANGUAGE sql STRICT AS $$
   -- Set the new password, but only if we're expecting confirmation
@@ -469,7 +469,7 @@ LANGUAGE sql STRICT AS $$
             WHERE NOT validate_password(plain_password)) errors;
 $$;
 
-COMMENT ON FUNCTION confirm(nonce uuid, plain_password character varying, ip inet) IS
+COMMENT ON FUNCTION confirm(nonce uuid, plain_password text, ip inet) IS
 'Confirming valid email address and setting new password. Session is marked no longer for reset,
  and the expiry is pushed out.';
 
@@ -617,8 +617,7 @@ LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT to_timestamp(ts, 'Dy, DD Mon YYYY HH24:MI:SS')::timestamp without time zone;
 $$;
 
-CREATE FUNCTION login(email character varying, plain_password character varying, ip inet,
-                      agent character varying) RETURNS uuid
+CREATE FUNCTION login(email text, plain_password text, ip inet, agent text) RETURNS uuid
 LANGUAGE sql STRICT LEAKPROOF AS $$
   -- Create a new session
   WITH auth AS
@@ -639,8 +638,7 @@ LANGUAGE sql STRICT LEAKPROOF AS $$
     FROM auth;
 $$;
 
-COMMENT ON FUNCTION login(email character varying, plain_password character varying, ip inet,
-                          agent character varying) IS
+COMMENT ON FUNCTION login(email text, plain_password text, ip inet, agent text) IS
 'Authenticate the user by email, password. IP address and user agent are saved as part of the
  session. Return a session ID/nonce on successful login. Logins from the same user on the
  same browser will reuse an existing valid session to avoid session bloat.';
@@ -653,7 +651,7 @@ $$;
 
 COMMENT ON FUNCTION logout(nonce uuid, ip inet) IS 'Invalidate the current session.';
 
-CREATE FUNCTION mime_type(file_ext character varying) RETURNS character varying
+CREATE FUNCTION mime_type(file_ext text) RETURNS character varying
 LANGUAGE sql IMMUTABLE LEAKPROOF AS $$
   SELECT CASE
   -- images
@@ -683,7 +681,7 @@ LANGUAGE sql IMMUTABLE LEAKPROOF AS $$
 END $$;
 
 
-COMMENT ON FUNCTION mime_type(file_ext character varying) IS
+COMMENT ON FUNCTION mime_type(file_ext text) IS
 'Get the MIME type from the file extension.';
 
 CREATE FUNCTION modified() RETURNS trigger
@@ -797,12 +795,12 @@ COMMENT ON FUNCTION register(email character varying, ip inet, user_agent charac
 
 Note: the person must be given the correct ACLs to perform most actions.';
 
-CREATE FUNCTION source(source character varying, url character varying) RETURNS character varying
+CREATE FUNCTION source(source text, url text) RETURNS text
 LANGUAGE sql IMMUTABLE LEAKPROOF AS $$
   SELECT coalesce(source, regexp_replace(url, '^(?:https?:)?//(?:www\.)?([^/]+)/.+$', '\1'), "Unknown");
 $$;
 
-COMMENT ON FUNCTION source(source character varying, url character varying) IS
+COMMENT ON FUNCTION source(source text, url text) IS
 'Provide a headline''s source either by explicit value or by using the domain name.';
 
 CREATE FUNCTION text(id episode_num) RETURNS text
@@ -831,8 +829,7 @@ $$;
 COMMENT ON FUNCTION format_query(query text, dict regconfig) IS
 'Sanitizes input to allow easier boolean searches. Takes an optional dictionary configuration.';
 
-CREATE FUNCTION update_password(email_addr character varying, old_pass character varying,
-                                new_pass character varying) RETURNS character varying
+CREATE FUNCTION update_password(email_addr text, old_pass text, new_pass text) RETURNS text
 LANGUAGE sql STABLE STRICT LEAKPROOF AS $$
   UPDATE people
     SET encrypted_password = crypt(new_pass, gen_salt('bf', 10))
@@ -841,12 +838,11 @@ LANGUAGE sql STABLE STRICT LEAKPROOF AS $$
     RETURNING email;
 $$;
 
-COMMENT ON FUNCTION update_password(email_addr character varying, old_pass character varying,
-                                    new_pass character varying) IS
+COMMENT ON FUNCTION update_password(email_addr text, old_pass text, new_pass text) IS
 'Update the password by successfully authenticating with email and old password first. New password
  is subject to password validation as well.';
 
-CREATE FUNCTION validate_password(pass character varying) RETURNS boolean
+CREATE FUNCTION validate_password(pass text) RETURNS boolean
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT length(trim(pass)) >= 8
          AND pass ~ '[a-z]'
@@ -855,7 +851,7 @@ LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
          AND pass ~ '[^a-zA-Z0-9]'
 $$;
 
-COMMENT ON FUNCTION validate_password(pass character varying) IS
+COMMENT ON FUNCTION validate_password(pass text) IS
 'Verifies the passwords meets or exceeds minimum strength requirements.';
 
 CREATE SERVER gs_multicorn
