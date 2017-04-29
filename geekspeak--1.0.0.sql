@@ -511,16 +511,17 @@ LANGUAGE sql STRICT AS $$
     UPDATE sessions SET nonce = gen_random_uuid(),
                         expires = now() + current_setting('geekspeak.session_duration')::interval,
                         for_reset = false
-      WHERE nonce = nonce AND ips[1] = ip
+      WHERE for_reset = true AND nonce = nonce AND ips[1] = ip
       RETURNING nonce, person, ips[1] = ip AS valid_ip)
-  SELECT to_jsonb(userdata) - 'nonce', nonce
+ (SELECT to_jsonb(userdata) - 'nonce', nonce
     FROM (SELECT email, display_name, description, bio, s.nonce
             FROM people p, sess s
             WHERE nonce = nonce AND p.id = s.person) userdata
   UNION ALL
   SELECT to_jsonb(errors), NULL
-    FROM (SELECT validate_password(plain_password) AS valid_password
-            WHERE NOT validate_password(plain_password)) errors;
+    FROM (SELECT validate_password(plain_password) AS login
+            WHERE NOT validate_password(plain_password)) errors)
+  LIMIT 1;
 $$;
 
 COMMENT ON FUNCTION confirm(nonce uuid, plain_password text, ip inet) IS
