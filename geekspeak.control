@@ -2,4 +2,4 @@
 comment = 'GeekSpeak podcast schema (https://geekspeak.org)'
 default_version = '1.0.0'
 relocatable = true
-requires = 'plpgsql, btree_gist, pgcrypto'
+requires = 'plpgsql, btree_gist, isn, pgcrypto'
