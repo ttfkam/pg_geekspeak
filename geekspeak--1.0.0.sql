@@ -81,7 +81,7 @@ CREATE TABLE sessions (
     nonce uuid NOT NULL PRIMARY KEY,
     person integer NOT NULL REFERENCES people(id) ON UPDATE CASCADE ON DELETE RESTRICT,
     expires timestamptz
-        DEFAULT (now() + (current_setting('session_duration'::text))::interval) NOT NULL,
+        DEFAULT (now() + (current_setting('geekspeak.session_duration'::text))::interval) NOT NULL,
     for_reset boolean DEFAULT false NOT NULL,
     ips inet[] NOT NULL,
     user_agent character varying DEFAULT ''::character varying NOT NULL
@@ -421,16 +421,16 @@ CREATE FUNCTION authorize(
                   OUT new_expires timestamptz) RETURNS record
 LANGUAGE sql STRICT LEAKPROOF AS $$-- Keep the session going either way
   UPDATE sessions
-    SET expires = now() + (current_setting('session_duration'))::interval,
+    SET expires = now() + (current_setting('geekspeak.session_duration'))::interval,
         ips = add_ip(ips, ip)
     WHERE nonce = session_id AND user_agent = client AND for_reset = false AND expires > now()
-        AND expires > (now() - (current_setting('session_duration')::interval / 2));
+        AND expires > (now() - (current_setting('geekspeak.session_duration')::interval / 2));
 
   -- Find out if authorized and when the session goes away
   SELECT (acls IS NOT NULL
              AND (acls || '{authenticated}'::role[])
                  && ARRAY['superuser'::role,requirement]) AS authorized,
-      nullif(session_expires, now() + current_setting('session_duration')::interval)
+      nullif(session_expires, now() + current_setting('geekspeak.session_duration')::interval)
           AS new_expires
     FROM user_sessions;
 $$;
@@ -509,7 +509,7 @@ LANGUAGE sql STRICT AS $$
   -- a session id, not data
   WITH sess AS (
     UPDATE sessions SET nonce = gen_random_uuid(),
-                        expires = now() + current_setting('session_duration')::interval,
+                        expires = now() + current_setting('geekspeak.session_duration')::interval,
                         for_reset = false
       WHERE nonce = nonce AND ips[1] = ip
       RETURNING nonce, person, ips[1] = ip AS valid_ip)
@@ -728,7 +728,7 @@ LANGUAGE sql STRICT LEAKPROOF AS $$
                AND encrypted_password = crypt(plain_password, encrypted_password))
       ON CONFLICT (nonce) DO UPDATE
           SET ips = add_ip(sessions.ips, ip),
-              expires = now() + (current_setting('session_duration'::text))::interval
+              expires = now() + (current_setting('geekspeak.session_duration'::text))::interval
       RETURNING nonce)
   -- Return the session id to the user
   SELECT nonce
@@ -812,7 +812,7 @@ LANGUAGE plpgsql STRICT LEAKPROOF AS $$
 
   IF result IS NOT NULL THEN
     UPDATE sessions
-      SET expires = now() + current_setting('session_duration')::interval, ips = add_ip(ips, ip)
+      SET expires = now() + current_setting('geekspeak.session_duration')::interval, ips = add_ip(ips, ip)
       WHERE nonce = nonce AND expires > now();
   END IF;
 
