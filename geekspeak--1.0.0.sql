@@ -52,7 +52,7 @@ COMMENT ON TYPE role IS
 CREATE TABLE people (
     id serial NOT NULL PRIMARY KEY,
     email character varying(126) NOT NULL UNIQUE,
-    encrypted_password character(60) CHECK (length(encrypted_password) = 60),
+    encrypted_password character(60),
     display_name character varying(126),
     bio text,
     description character varying(126),
