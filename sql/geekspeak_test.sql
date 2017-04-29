@@ -16,7 +16,7 @@ SELECT register('test@example.com', '10.11.12.13', 'Test Agent');
 --
 
 SELECT person, nonce IS NOT NULL
-  FROM confirm(gen_random_uuid(), 'TestPassword1', '10.11.12.13');
+  FROM confirm(gen_random_uuid(), 'TestPassword1$', '10.11.12.13');
 
 --
 -- Faulty confirmation: wrong IP
@@ -24,7 +24,7 @@ SELECT person, nonce IS NOT NULL
 
 WITH cte AS (SELECT nonce FROM sessions WHERE for_reset = true LIMIT 1)
 SELECT c.person, c.nonce IS NOT NULL
-  FROM cte, confirm(cte.nonce, 'TestPassword1', '10.11.12.14') AS c;
+  FROM cte, confirm(cte.nonce, 'TestPassword1$', '10.11.12.14') AS c;
 
 --
 -- Confirm account
@@ -32,7 +32,7 @@ SELECT c.person, c.nonce IS NOT NULL
 
 WITH cte AS (SELECT nonce FROM sessions WHERE for_reset = true LIMIT 1)
 SELECT c.person, c.nonce IS NOT NULL
-  FROM cte, confirm(cte.nonce, 'TestPassword1', '10.11.12.13') AS c;
+  FROM cte, confirm(cte.nonce, 'TestPassword1$', '10.11.12.13') AS c;
 
 --
 -- Verify active logins
@@ -50,13 +50,13 @@ SELECT count(*)
 -- Bad login: wrong password
 --
 
-SELECT login('test@example.com', 'WrongPassword0', '10.1.2.3', 'Test Agent') IS NOT NULL;
+SELECT login('test@example.com', 'WrongPassword0$', '10.1.2.3', 'Test Agent') IS NOT NULL;
 
 --
 -- Successful login
 --
 
-SELECT login('test@example.com', 'TestPassword1', '10.1.2.3', 'Test Agent') IS NOT NULL;
+SELECT login('test@example.com', 'TestPassword1$', '10.1.2.3', 'Test Agent') IS NOT NULL;
 
 --
 -- Logout

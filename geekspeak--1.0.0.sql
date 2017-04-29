@@ -502,8 +502,7 @@ LANGUAGE sql STRICT AS $$
                       AND nonce = session_id
                       AND for_reset = true
                       AND expires > now()
-                      AND ips[1] = ip)
-       AND acls IS NOT NULL;
+                      AND ips[1] = ip);
 
   -- Extend the session timeout and return the user data, but keep the nonce separate since it is
   -- a session id, not data
@@ -512,15 +511,14 @@ LANGUAGE sql STRICT AS $$
                         expires = now() + current_setting('geekspeak.session_duration')::interval,
                         for_reset = false
       WHERE for_reset = true AND nonce = session_id AND ips[1] = ip
-      RETURNING nonce, person, ips[1] = ip AS valid_ip)
- (SELECT to_jsonb(userdata) - 'nonce', nonce
-    FROM (SELECT email, display_name, description, bio, s.nonce
-            FROM people p, sess s
-            WHERE nonce = session_id AND p.id = s.person) userdata
-  UNION ALL
-  SELECT to_jsonb(errors), NULL
-    FROM (SELECT validate_password(plain_password) AS login
-            WHERE NOT validate_password(plain_password)) errors)
+      RETURNING nonce, person)
+  SELECT jsonb_build_object('email', p.email,
+                            'name', p.display_name,
+                            'description', p.description,
+                            'bio', p.bio),
+         sess.nonce
+  FROM sess, people AS p
+  WHERE p.id = sess.person
   LIMIT 1;
 $$;
 
