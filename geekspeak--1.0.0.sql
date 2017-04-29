@@ -434,6 +434,13 @@ LANGUAGE sql STRICT LEAKPROOF AS $$-- Keep the session going either way
     FROM user_sessions;
 $$;
 
+CREATE FUNCTION reify_url(https boolean, url character varying) RETURNS character varying
+LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
+  SELECT CASE WHEN https THEN 'https:' ELSE 'http:' END || url;
+$$;
+
+COMMENT ON FUNCTION reify_url(https boolean, url character varying) IS 'Add protocol to a URL. This is necessary because we want http and https to be considered equivalent when determining unique headlines.';
+
 CREATE FUNCTION bits(ordered_bits integer[], OUT id integer, OUT source character varying,
                      OUT title character varying, OUT description text,
                      OUT labels character varying[], OUT url character varying,
@@ -777,13 +784,6 @@ $$;
 
 COMMENT ON FUNCTION rank_modifier(moment timestamp) IS
 'Older stuff should be less likely to show up in search results.';
-
-CREATE FUNCTION reify_url(https boolean, url character varying) RETURNS character varying
-LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
-  SELECT CASE WHEN https THEN 'https:' ELSE 'http:' END || url;
-$$;
-
-COMMENT ON FUNCTION reify_url(https boolean, url character varying) IS 'Add protocol to a URL. This is necessary because we want http and https to be considered equivalent when determining unique headlines.';
 
 CREATE FUNCTION record(id episode_num) RETURNS TABLE(season smallint, episode smallint)
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
