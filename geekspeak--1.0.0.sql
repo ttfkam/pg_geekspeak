@@ -9,8 +9,8 @@
 \echo Use "CREATE EXTENSION geekspeak" to load this file. \quit
 
 CREATE TABLE entities (
-    created timestamptz DEFAULT now() NOT NULL,
-    modified timestamptz DEFAULT now() NOT NULL
+    created timestamp DEFAULT now() NOT NULL,
+    modified timestamp DEFAULT now() NOT NULL
 );
 
 COMMENT ON TABLE entities IS
