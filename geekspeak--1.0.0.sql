@@ -344,7 +344,7 @@ LANGUAGE sql STRICT LEAKPROOF AS $$
       VALUES(source(article->>'source', article->>'url'),
            regexp_replace(coalesce(article->>'canonical', article->>'url'), '^https?:(.+)$', '\1'),
            coalesce(article->>'og_title', article->>'title', article->>'twitter_title',
-                               article->>'url')
+                               article->>'url'),
            article->>'description',
            coalesce(string_to_array(article->>'keywords', ',', '')::varchar[], '{}'::varchar[]),
            jsonb_object('{type,locale}'::text[],
