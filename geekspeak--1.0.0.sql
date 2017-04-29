@@ -9,8 +9,8 @@
 \echo Use "CREATE EXTENSION geekspeak" to load this file. \quit
 
 CREATE TABLE entities (
-    created timestamp with time zone DEFAULT now() NOT NULL,
-    modified timestamp with time zone DEFAULT now() NOT NULL
+    created timestamptz DEFAULT now() NOT NULL,
+    modified timestamptz DEFAULT now() NOT NULL
 );
 
 COMMENT ON TABLE entities IS
@@ -80,7 +80,7 @@ COMMENT ON COLUMN people.description IS
 CREATE TABLE sessions (
     nonce uuid NOT NULL PRIMARY KEY,
     person integer NOT NULL REFERENCES people(id) ON UPDATE CASCADE ON DELETE RESTRICT,
-    expires timestamp with time zone
+    expires timestamptz
         DEFAULT (now() + (current_setting('gs.session_duration'::text))::interval) NOT NULL,
     for_reset boolean DEFAULT false NOT NULL,
     ips inet[] NOT NULL,
@@ -114,7 +114,7 @@ COMMENT ON COLUMN sessions.user_agent IS
 CREATE VIEW active_sessions AS
   SELECT p.id AS user_id, s.nonce, p.email, p.created AS user_registered,
          s.created AS session_created, s.expires AS session_expires,
-         (now() - (s.created)::timestamp with time zone) AS logged_in_time, s.for_reset,
+         (now() - (s.created)::timestamptz) AS logged_in_time, s.for_reset,
          p.display_name, p.bio, p.description, p.acls, s.ips AS session_ips, s.user_agent,
          (p.encrypted_password IS NOT NULL) AS has_password
     FROM people p
@@ -155,7 +155,7 @@ COMMENT ON COLUMN locations.nickname IS
 --
 CREATE TABLE episodes (
     id serial NOT NULL PRIMARY KEY,
-    published timestamp with time zone,
+    published timestamptz,
     recorded tstzrange NOT NULL,
     location smallint NOT NULL REFERENCES locations(id) ON UPDATE CASCADE ON DELETE RESTRICT,
     num episode_num NOT NULL UNIQUE,
@@ -217,9 +217,9 @@ CREATE TABLE headlines (
     metadata jsonb NOT NULL,
     discussion text,
     labels character varying(50)[],
-    added timestamp with time zone DEFAULT now() NOT NULL,
+    added timestamptz DEFAULT now() NOT NULL,
     fts tsvector,
-    archived timestamp without time zone,
+    archived timestamp,
     teaser_image text,
     content text,
     content_type character varying(15) DEFAULT 'article',
@@ -336,6 +336,30 @@ COMMENT ON COLUMN bits.fts IS
 CREATE UNIQUE INDEX episode_headline_udx ON bits
   USING btree (episode DESC NULLS LAST, headline DESC NULLS LAST);
 
+CREATE OR REPLACE VIEW user_sessions AS
+ SELECT p.id AS user_id,
+    s.nonce,
+    p.email,
+    p.created AS user_registered,
+    s.created AS session_created,
+    s.expires AS session_expires,
+    now() - s.created::timestamptz AS logged_in_time,
+    s.for_reset,
+    p.display_name,
+    p.bio,
+    p.description,
+    p.acls,
+    s.ips AS session_ips,
+    s.user_agent,
+    p.encrypted_password IS NOT NULL AS has_password
+   FROM people p
+     LEFT JOIN sessions s ON p.id = s.person
+  WHERE s.expires > now() AND p.acls IS NOT NULL;
+
+COMMENT ON VIEW user_sessions IS
+'Simplified view to see who is logged in, how long they''ve been logged in, and what client
+ they''re using. Password and ACLs omitted.';
+
 CREATE FUNCTION source(source text, url text) RETURNS text
 LANGUAGE sql IMMUTABLE LEAKPROOF AS $$
   SELECT coalesce(source, regexp_replace(url, '^(?:https?:)?//(?:www\.)?([^/]+)/.+$', '\1'));
@@ -393,7 +417,7 @@ COMMENT ON FUNCTION add_ip(ips inet[], ip inet) IS
 CREATE FUNCTION authorize(
                   session_id uuid, ip inet, client text,
                   requirement role DEFAULT 'authenticated'::role, OUT authorized boolean,
-                  OUT new_expires timestamp with time zone) RETURNS record
+                  OUT new_expires timestamptz) RETURNS record
 LANGUAGE sql STRICT LEAKPROOF AS $$-- Keep the session going either way
   UPDATE sessions
     SET expires = now() + (current_setting('gs.session_duration'))::interval,
@@ -481,8 +505,8 @@ COMMENT ON FUNCTION confirm(nonce uuid, plain_password text, ip inet) IS
 'Confirming valid email address and setting new password. Session is marked no longer for reset,
  and the expiry is pushed out.';
 
-CREATE FUNCTION episode_as_json(episode episode_num, lastmod timestamp without time zone,
-                                OUT json jsonb, OUT modified timestamp without time zone)
+CREATE FUNCTION episode_as_json(episode episode_num, lastmod timestamp,
+                                OUT json jsonb, OUT modified timestamp)
                                 RETURNS record
 LANGUAGE sql STABLE SECURITY DEFINER LEAKPROOF AS $$
   (SELECT jsonb_build_object('episode', num, 'title', title, 'promo', promo,
@@ -610,19 +634,19 @@ COMMENT ON FUNCTION headlines_fts() IS
 'Make sure the full text search (FTS) vector is updated for the search index whenever a change is
  made to the headline.';
 
-CREATE FUNCTION http(ts timestamp with time zone) RETURNS text
+CREATE FUNCTION http(ts timestamptz) RETURNS text
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT http(ts::timestamp);
 $$;
 
-CREATE FUNCTION http(ts timestamp without time zone) RETURNS text
+CREATE FUNCTION http(ts timestamp) RETURNS text
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT to_char(ts, 'Dy, DD Mon YYYY HH24:MI:SS');
 $$;
 
-CREATE FUNCTION http(ts text) RETURNS timestamp without time zone
+CREATE FUNCTION http(ts text) RETURNS timestamp
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
-  SELECT to_timestamp(ts, 'Dy, DD Mon YYYY HH24:MI:SS')::timestamp without time zone;
+  SELECT to_timestamp(ts, 'Dy, DD Mon YYYY HH24:MI:SS')::timestamp;
 $$;
 
 CREATE FUNCTION login(email text, plain_password text, ip inet, agent text) RETURNS uuid
@@ -746,12 +770,12 @@ $$;
 COMMENT ON FUNCTION rank_modifier(age interval) IS
 'Older stuff should be less likely to show up in search results.';
 
-CREATE FUNCTION rank_modifier(moment timestamp without time zone DEFAULT now()) RETURNS real
+CREATE FUNCTION rank_modifier(moment timestamp DEFAULT now()) RETURNS real
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT rank_modifier(now() - moment);
 $$;
 
-COMMENT ON FUNCTION rank_modifier(moment timestamp without time zone) IS
+COMMENT ON FUNCTION rank_modifier(moment timestamp) IS
 'Older stuff should be less likely to show up in search results.';
 
 CREATE FUNCTION reify_url(https boolean, url character varying) RETURNS character varying
