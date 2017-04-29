@@ -61,7 +61,7 @@ SELECT login('test@example.com', 'TestPassword1$', '10.1.2.3', 'Test Agent') IS 
 --
 
 SELECT logout(nonce, '10.2.4.6')
-  FROM sessions WHERE for_reset = false;
+  FROM sessions WHERE for_reset = false AND expires > now();
 
 --
 -- Verify active logins
