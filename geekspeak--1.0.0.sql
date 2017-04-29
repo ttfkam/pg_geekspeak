@@ -80,7 +80,7 @@ COMMENT ON COLUMN people.description IS
 CREATE TABLE sessions (
     nonce uuid NOT NULL PRIMARY KEY,
     person integer NOT NULL REFERENCES people(id) ON UPDATE CASCADE ON DELETE RESTRICT,
-    expires timestamp without time zone
+    expires timestamp with time zone
         DEFAULT (now() + (current_setting('gs.session_duration'::text))::interval) NOT NULL,
     for_reset boolean DEFAULT false NOT NULL,
     ips inet[] NOT NULL,
@@ -89,7 +89,7 @@ CREATE TABLE sessions (
 
 ALTER TABLE ONLY sessions
     ADD CONSTRAINT sessions_similarity_gist EXCLUDE
-        USING gist (person WITH =, user_agent WITH =, tsrange(created, expires) WITH &&);
+        USING gist (person WITH =, user_agent WITH =, tstzrange(created, expires) WITH &&);
 
 COMMENT ON TABLE sessions IS
 'Logins and persistent sessions. Note: not all entries are current. Be sure to check the "expires"
@@ -155,7 +155,7 @@ COMMENT ON COLUMN locations.nickname IS
 --
 CREATE TABLE episodes (
     id serial NOT NULL PRIMARY KEY,
-    published timestamp without time zone,
+    published timestamp with time zone,
     recorded tstzrange NOT NULL,
     location smallint NOT NULL REFERENCES locations(id) ON UPDATE CASCADE ON DELETE RESTRICT,
     num episode_num NOT NULL UNIQUE,
@@ -217,7 +217,7 @@ CREATE TABLE headlines (
     metadata jsonb NOT NULL,
     discussion text,
     labels character varying(50)[],
-    added timestamp without time zone DEFAULT now() NOT NULL,
+    added timestamp with time zone DEFAULT now() NOT NULL,
     fts tsvector,
     archived timestamp without time zone,
     teaser_image text,
@@ -280,8 +280,7 @@ CREATE TABLE bit_templates (
     title character varying(126) NOT NULL,
     description text,
     read_only_message text,
-    "order" real DEFAULT 0 NOT NULL,
-    modified timestamp without time zone DEFAULT now() NOT NULL
+    "order" real DEFAULT 0 NOT NULL
 ) INHERITS (entities) WITH (OIDS = FALSE);
 
 COMMENT ON TABLE bit_templates IS
@@ -386,7 +385,7 @@ COMMENT ON FUNCTION add_ip(ips inet[], ip inet) IS
 CREATE FUNCTION authorize(
                   session_id uuid, ip inet, client character varying,
                   requirement role DEFAULT 'authenticated'::role, OUT authorized boolean,
-                  OUT new_expires timestamp without time zone) RETURNS record
+                  OUT new_expires timestamp with time zone) RETURNS record
 LANGUAGE sql STRICT LEAKPROOF AS $$-- Keep the session going either way
   UPDATE sessions
     SET expires = now() + (current_setting('gs.session_duration'))::interval,
