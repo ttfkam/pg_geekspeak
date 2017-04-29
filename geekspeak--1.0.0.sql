@@ -98,15 +98,20 @@ COMMENT ON TABLE sessions IS
 COMMENT ON COLUMN sessions.nonce IS
 'Unique 128-bit session ID';
 
+COMMENT ON COLUMN sessions.expires IS
+'When the session expires. Logins after this moment create a new session (new row in the table).
+ Session expiries can be pushed forward through regular access.';
+
 COMMENT ON COLUMN sessions.for_reset IS
 'If this session is for password reset and recovery or for a standard login.';
 
 COMMENT ON COLUMN sessions.ips IS
 'IPs the user used to access priviledged portions of the site—e.g., admin, commenting,
- etc.—anything that required credentials.';
+ etc.—anything that required credentials. It is assumed that IPs can change even within a single
+ session.';
 
 COMMENT ON COLUMN sessions.user_agent IS
-'The client used to login to the site.';
+'The client used to login to the site. (This means your web browser.)';
 
 --
 -- Current logins
@@ -174,6 +179,7 @@ CREATE TABLE episodes (
     tags character varying(45)[],
     fts tsvector NOT NULL,
     bit_order integer[],
+    bit_offsets smallint[],
     content text
 ) INHERITS (entities) WITH (OIDS = FALSE);
 
@@ -190,12 +196,40 @@ COMMENT ON COLUMN episodes.description IS
 'General description of the episode, formerly known as the abstract.';
 
 COMMENT ON COLUMN episodes.num IS
-'Season and episode number. See: episode_num(season, episode), episode_num(airdate),
- record(episode_num), and text(episode_num)';
+'Season and episode number. See: episode_num(season, episode), record(episode_num), and
+ text(episode_num)';
 
 COMMENT ON COLUMN episodes.transcript IS
 'Hopefully text-to-speech will improve enough for this to become viable and incorporated into
  search and audio files.';
+
+COMMENT ON COLUMN episodes.published IS
+'When the podcast audio goes live.';
+
+COMMENT ON COLUMN episodes.recorded IS
+'The scheduled (or actual) time to record the podcast. To be used for the calendar.';
+
+COMMENT ON COLUMN episodes.location IS
+'Where the host is recording from.';
+
+COMMENT ON COLUMN episodes.guid_override IS
+'A permanent GUID to keep podcast IDs consistent and prevent listeners from downloading
+ duplicates.';
+
+COMMENT ON COLUMN episodes.tags IS
+'Tags to categorize shows and facilitate searches.';
+
+COMMENT ON COLUMN episodes.fts IS
+'Full text search vector for the episode and its parts. Requires GIST index for effective use.';
+
+COMMENT ON COLUMN episodes.bit_order IS
+'Array of bit IDs. Replaces bit_episodes table.';
+
+COMMENT ON COLUMN episodes.bit_offsets IS
+'Array of time offsets in seconds marking the start time of each bit relative to show start.';
+
+COMMENT ON COLUMN episodes.content IS
+'Show content and/or notes that do not fit the bit format.';
 
 --
 -- The people involved in the making, editing, and publishing of an episode.
