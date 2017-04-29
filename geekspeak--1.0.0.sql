@@ -491,7 +491,7 @@ $$;
 COMMENT ON FUNCTION validate_password(pass text) IS
 'Verifies the passwords meets or exceeds minimum strength requirements.';
 
-CREATE FUNCTION confirm(nonce uuid, plain_password text, ip inet)
+CREATE FUNCTION confirm(session_id uuid, plain_password text, ip inet)
     RETURNS TABLE(person jsonb, nonce uuid)
 LANGUAGE sql STRICT AS $$
   -- Set the new password, but only if we're expecting confirmation
@@ -499,7 +499,7 @@ LANGUAGE sql STRICT AS $$
     WHERE id = (SELECT person
                   FROM sessions
                   WHERE validate_password(plain_password)
-                      AND nonce = nonce
+                      AND nonce = session_id
                       AND for_reset = true
                       AND expires > now()
                       AND ips[1] = ip)
@@ -511,12 +511,12 @@ LANGUAGE sql STRICT AS $$
     UPDATE sessions SET nonce = gen_random_uuid(),
                         expires = now() + current_setting('geekspeak.session_duration')::interval,
                         for_reset = false
-      WHERE for_reset = true AND nonce = nonce AND ips[1] = ip
+      WHERE for_reset = true AND nonce = session_id AND ips[1] = ip
       RETURNING nonce, person, ips[1] = ip AS valid_ip)
  (SELECT to_jsonb(userdata) - 'nonce', nonce
     FROM (SELECT email, display_name, description, bio, s.nonce
             FROM people p, sess s
-            WHERE nonce = nonce AND p.id = s.person) userdata
+            WHERE nonce = session_id AND p.id = s.person) userdata
   UNION ALL
   SELECT to_jsonb(errors), NULL
     FROM (SELECT validate_password(plain_password) AS login
@@ -524,7 +524,7 @@ LANGUAGE sql STRICT AS $$
   LIMIT 1;
 $$;
 
-COMMENT ON FUNCTION confirm(nonce uuid, plain_password text, ip inet) IS
+COMMENT ON FUNCTION confirm(session_id uuid, plain_password text, ip inet) IS
 'Confirming valid email address and setting new password. Session is marked no longer for reset,
  and the expiry is pushed out.';
 
