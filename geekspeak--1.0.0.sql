@@ -584,14 +584,14 @@ CREATE FUNCTION confirm(session_id uuid, plain_password text, ip inet)
     RETURNS TABLE(person jsonb, nonce uuid)
 LANGUAGE sql STRICT SECURITY DEFINER AS $$
   -- Set the new password, but only if we're expecting confirmation
-  UPDATE people SET encrypted_password = crypt(plain_password, gen_salt('bf', 10))
-    WHERE id = (SELECT person
-                  FROM sessions
-                  WHERE validate_password(plain_password)
-                      AND nonce = session_id
-                      AND for_reset = true
-                      AND expires > now()
-                      AND ips[1] = ip);
+  INSERT INTO passwords(id, encrypted_password)
+    (SELECT person, crypt(plain_password, gen_salt('bf', 10))
+      FROM sessions
+			WHERE validate_password(plain_password)
+					AND nonce = session_id
+					AND for_reset = true
+					AND expires > now()
+					AND ips[1] = ip);
 
   -- Extend the session timeout and return the user data, but keep the nonce separate since it is
   -- a session id, not data
@@ -938,7 +938,8 @@ LANGUAGE sql STRICT SECURITY DEFINER AS $$
   INSERT INTO sessions (nonce, person, for_reset, ips)
     (SELECT gen_random_uuid(), id, true, array[ip]
        FROM people
-       WHERE email = email and acls IS NOT NULL);
+       LEFT JOIN acls USING (id)
+       WHERE email = email and roles IS NOT NULL);
 $$;
 
 ALTER FUNCTION recover(text, inet, text) OWNER TO postgres;
@@ -951,8 +952,8 @@ COMMENT ON FUNCTION recover(email text, ip inet, user_agent text) IS
 CREATE FUNCTION register(email text, ip inet, user_agent text)
     RETURNS void
 LANGUAGE sql STRICT SECURITY DEFINER AS $$
-  INSERT into people (email, encrypted_password, display_name)
-    VALUES(email, '', regexp_replace(email, '@.+$', ''));
+  INSERT into people (email, display_name)
+    VALUES(email, regexp_replace(email, '@.+$', ''));
 
   INSERT INTO sessions (nonce, person, for_reset, ips, expires, user_agent)
     VALUES(gen_random_uuid(), lastval(), true, ARRAY[ip], now() + interval '1 hour', user_agent);
@@ -1076,17 +1077,17 @@ COMMENT ON FOREIGN TABLE episode_misc_fdt IS
 
 CREATE MATERIALIZED VIEW episode_media AS
   SELECT episode_num(episode_audio_fdt.season,
-                     episode_audio_fdt.episode)::smallint) AS num,
+                     episode_audio_fdt.episode) AS num,
          filename,
          NULL::text AS name,
          mime_type(substring(filename FROM 2)) AS mime_type
     FROM episode_media_fdt
   UNION ALL
   SELECT episode_num(episode_audio_fdt.season,
-                     episode_audio_fdt.episode)::smallint) AS num,
+                     episode_audio_fdt.episode) AS num,
          filename,
          name AS name,
-         mime_type(regexp_matches(name, '[^.]+$')[0]) AS mime_type
+         mime_type((regexp_matches(name, '[^.]+$'))[1]) AS mime_type
     FROM episode_misc_fdt
   WITH NO DATA;
 
