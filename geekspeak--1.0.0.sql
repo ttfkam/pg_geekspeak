@@ -982,11 +982,11 @@ COMMENT ON FUNCTION text(id episode_num) IS
 
 CREATE FUNCTION update_password(email_addr text, old_pass text, new_pass text) RETURNS boolean
 LANGUAGE sql STRICT LEAKPROOF SECURITY DEFINER AS $$
-  WITH p AS (SELECT id FROM people WHERE email = email_addr)
   UPDATE passwords AS pass
     SET encrypted_password = crypt(new_pass, gen_salt('bf', 10))
-    WHERE pass.id = p.id AND encrypted_password = crypt(old_pass, encrypted_password)
-          AND validate_password(new_pass)
+    WHERE pass.id = (SELECT id FROM people WHERE email = email_addr)
+      AND encrypted_password = crypt(old_pass, encrypted_password)
+      AND validate_password(new_pass)
     RETURNING true;
 $$;
 
