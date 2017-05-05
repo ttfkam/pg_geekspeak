@@ -1076,15 +1076,15 @@ COMMENT ON FOREIGN TABLE episode_misc_fdt IS
 'Files attached to the episode, such as images, videos, and documents like PDF.';
 
 CREATE MATERIALIZED VIEW episode_media AS
-  SELECT episode_num(episode_audio_fdt.season,
-                     episode_audio_fdt.episode) AS num,
+  SELECT episode_num(episode_media_fdt.season,
+                     episode_media_fdt.episode) AS num,
          filename,
          NULL::text AS name,
          mime_type(substring(filename FROM 2)) AS mime_type
     FROM episode_media_fdt
   UNION ALL
-  SELECT episode_num(episode_audio_fdt.season,
-                     episode_audio_fdt.episode) AS num,
+  SELECT episode_num(episode_misc_fdt.season,
+                     episode_misc_fdt.episode) AS num,
          filename,
          name AS name,
          mime_type((regexp_matches(name, '[^.]+$'))[1]) AS mime_type
