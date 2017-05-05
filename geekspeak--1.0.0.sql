@@ -94,7 +94,7 @@ CREATE TABLE acls (
 REVOKE ALL ON TABLE acls FROM PUBLIC;
 
 COMMENT ON TABLE acls IS
-'ACLs pulled out of people for database security.'
+'ACLs pulled out of people for database security.';
 
 CREATE FUNCTION session_duration() RETURNS interval
 LANGUAGE sql STABLE STRICT LEAKPROOF AS $$
@@ -170,8 +170,8 @@ CREATE VIEW active_sessions AS
     LEFT JOIN sessions s ON (p.id = s.person)
     WHERE s.expires > now() AND NOT s.for_reset;
 
-REVOKE ALL ON VIEW active_sessions FROM PUBLIC;
-GRANT SELECT ON VIEW active_sessions TO geekspeak_audit;
+REVOKE ALL ON TABLE active_sessions FROM PUBLIC;
+GRANT SELECT ON TABLE active_sessions TO geekspeak_audit;
 
 COMMENT ON VIEW active_sessions IS
 'Simplified view to see who is logged in, how long they''ve been logged in, and what client
@@ -1090,8 +1090,8 @@ CREATE MATERIALIZED VIEW episode_media AS
     FROM episode_misc_fdt
   WITH NO DATA;
 
-REVOKE ALL ON MATERIALIZED VIEW episode_media FROM PUBLIC;
-GRANT SELECT ON MATERIALIZED VIEW episode_media TO geekspeak_org;
+REVOKE ALL ON TABLE episode_media FROM PUBLIC;
+GRANT SELECT ON TABLE episode_media TO geekspeak_org;
 
 COMMENT ON MATERIALIZED VIEW episode_media IS
 'Fast, cached access to filesystem entries via foreign tables episode_media_fdt and
