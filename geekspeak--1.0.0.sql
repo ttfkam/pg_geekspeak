@@ -1030,15 +1030,15 @@ CREATE TRIGGER people_modified BEFORE UPDATE ON people
 --
 -- Set up reference directories relative to system configuration
 --
-SELECT set_config('geekspeak.docroot',
-                  coalesce(nullif(current_setting('geekspeak.docroot', true), ''),
-                           '/var/www/geekspeak.org'),
-                  true);
+--SELECT set_config('geekspeak.docroot',
+--                  coalesce(nullif(current_setting('geekspeak.docroot', true), ''),
+--                           '/var/www/geekspeak.org'),
+--                  true);
 
-SELECT set_config('geekspeak.mediaroot',
-                  coalesce(nullif(current_setting('geekspeak.mediaroot', true), ''),
-                           nullif(current_setting('geekspeak.docroot'), '') || '/media'),
-                  true);
+--SELECT set_config('geekspeak.mediaroot',
+--                  coalesce(nullif(current_setting('geekspeak.mediaroot', true), ''),
+--                           nullif(current_setting('geekspeak.docroot'), '') || '/media'),
+--                  true);
 
 CREATE SERVER gs_multicorn
   FOREIGN DATA WRAPPER multicorn
@@ -1056,7 +1056,7 @@ CREATE FOREIGN TABLE episode_media_fdt (
   OPTIONS (
     filename_column 'filename',
     pattern 's{season}e{episode}.{ext}',
-    root_dir current_setting('geekspeak.mediaroot');
+    root_dir '/var/www/geekspeak.org/media');
 
 COMMENT ON FOREIGN TABLE episode_media_fdt IS
 'Intrinsic episode files such as the teaser image and podcast audio.';
@@ -1070,7 +1070,7 @@ CREATE FOREIGN TABLE episode_misc_fdt (
   OPTIONS (
     filename_column 'filename',
     pattern 's{season}e{episode} {name}',
-    root_dir current_setting('geekspeak.mediaroot');
+    root_dir '/var/www/geekspeak.org/media');
 
 COMMENT ON FOREIGN TABLE episode_misc_fdt IS
 'Files attached to the episode, such as images, videos, and documents like PDF.';
