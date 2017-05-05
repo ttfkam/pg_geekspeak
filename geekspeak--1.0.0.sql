@@ -17,10 +17,10 @@ COMMENT ON TABLE entities IS
 'Common features of tables related to modification and creation times.';
 
 COMMENT ON COLUMN entities.created IS
-'When the entity was created, relative to the US Pacific timezone.';
+'When the entity was created, relative to the US/Pacific timezone.';
 
 COMMENT ON COLUMN entities.modified IS
-'When the entity was last updated, relative to the US Pacific timezone. When the entity is first
+'When the entity was last updated, relative to the US/Pacific timezone. When the entity is first
  created, it holds the same value as "created".';
 
 --
@@ -47,17 +47,18 @@ COMMENT ON TYPE role IS
 'Show roles. Some are defunct due to the loss of KUSP, but kept for historical lookup.';
 
 --
--- Formerly known as users. Using the term "people" and "person" since "user" is overloaded.
+-- Formerly known as users. Using the terms "people" and "person" since "user" is overloaded.
 --
 CREATE TABLE people (
     id serial NOT NULL PRIMARY KEY,
     email character varying(126) NOT NULL UNIQUE,
-    encrypted_password character(60),
     display_name character varying(126),
     bio text,
-    description character varying(126),
-    acls role[]
+    description character varying(126)
 ) INHERITS (entities) WITH (OIDS = FALSE);
+
+REVOKE ALL ON TABLE people FROM PUBLIC;
+GRANT SELECT, INSERT, UPDATE ON TABLE people TO geekspeak_org;
 
 COMMENT ON TABLE people IS
 'Formerly known as users. Using the term "people" and "person" since not all those listed will
@@ -65,14 +66,40 @@ COMMENT ON TABLE people IS
  keyword collisions. To prevent someone from logging in without deleting their account, set the
  acls array to NULL.';
 
-COMMENT ON COLUMN people.encrypted_password IS
-'Salted Blowfish. Access through login(email, password, IP, user agent), not directly.';
-
 COMMENT ON COLUMN people.display_name IS
 'How you want to be known to the world.';
 
 COMMENT ON COLUMN people.description IS
 'How you want to be introduced on the show';
+
+CREATE TABLE passwords (
+    id int4 NOT NULL UNIQUE REFERENCES people(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    encrypted_password character(60) NOT NULL
+) INHERITS (entities) WITH (OIDS = FALSE);
+
+REVOKE ALL ON TABLE passwords FROM PUBLIC;
+
+COMMENT ON TABLE passwords IS
+'Passwords pulled out of people for both database security and to set precedent for allowing other
+ authentication types like Google auth or SSL client certs. Also, passwords suck.'
+
+COMMENT ON COLUMN passwords.encrypted_password IS
+'Salted Blowfish. Access through login(email, password, IP, user agent), not directly.';
+
+CREATE TABLE acls (
+    id int4 NOT NULL UNIQUE REFERENCES people(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    roles role[] NOT NULL
+) INHERITS (entities) WITH (OIDS = FALSE);
+
+REVOKE ALL ON TABLE acls FROM PUBLIC;
+
+COMMENT ON TABLE acls IS
+'ACLs pulled out of people for database security.'
+
+CREATE FUNCTION session_duration() RETURNS interval
+LANGUAGE sql STABLE STRICT LEAKPROOF AS $$
+  SELECT coalesce(current_setting('geekspeak.session_duration', true), '8 days')::interval
+$$;
 
 --
 -- Logins and persistent sessions
@@ -81,11 +108,17 @@ CREATE TABLE sessions (
     nonce uuid NOT NULL PRIMARY KEY,
     person integer NOT NULL REFERENCES people(id) ON UPDATE CASCADE ON DELETE RESTRICT,
     expires timestamptz
-        DEFAULT (now() + (current_setting('geekspeak.session_duration'::text))::interval) NOT NULL,
+        DEFAULT (now() + session_duration()) NOT NULL,
     for_reset boolean DEFAULT false NOT NULL,
     ips inet[] NOT NULL,
     user_agent character varying DEFAULT ''::character varying NOT NULL
 ) INHERITS (entities) WITH (OIDS = FALSE);
+
+REVOKE ALL ON TABLE sessions FROM PUBLIC;
+GRANT SELECT ON TABLE sessions TO geekspeak_audit;
+
+CREATE INDEX sessions_expires_for_reset_idx ON sessions
+USING btree (expires DESC NULLS LAST, for_reset NULLS FIRST);
 
 ALTER TABLE ONLY sessions
     ADD CONSTRAINT sessions_similarity_gist EXCLUDE
@@ -97,6 +130,9 @@ COMMENT ON TABLE sessions IS
 
 COMMENT ON COLUMN sessions.nonce IS
 'Unique 128-bit session ID';
+
+COMMENT ON COLUMN sessions.person IS
+'Who is logged in currently on this device.';
 
 COMMENT ON COLUMN sessions.expires IS
 'When the session expires. Logins after this moment create a new session (new row in the table).
@@ -111,7 +147,8 @@ COMMENT ON COLUMN sessions.ips IS
  session.';
 
 COMMENT ON COLUMN sessions.user_agent IS
-'The client used to login to the site. (This means your web browser.)';
+'The client used to login to the site. (This means your web browser.) Note: logging in from a phone
+ and from a desktop results in two different sessions.';
 
 --
 -- Current logins
@@ -133,6 +170,9 @@ CREATE VIEW active_sessions AS
     LEFT JOIN sessions s ON (p.id = s.person)
     WHERE s.expires > now() AND NOT s.for_reset;
 
+REVOKE ALL ON VIEW active_sessions FROM PUBLIC;
+GRANT SELECT ON VIEW active_sessions TO geekspeak_audit;
+
 COMMENT ON VIEW active_sessions IS
 'Simplified view to see who is logged in, how long they''ve been logged in, and what client
  they''re using. Password and ACLs omitted.';
@@ -146,6 +186,9 @@ CREATE TABLE locations (
     geo point NOT NULL,
     nickname character varying(126) NOT NULL
 );
+
+REVOKE ALL ON TABLE locations FROM PUBLIC;
+GRANT SELECT, INSERT ON TABLE locations TO geekspeak_org;
 
 COMMENT ON TABLE locations IS
 'Technically just a location with a simple name, but pragmatically where we record our shows.';
@@ -182,6 +225,9 @@ CREATE TABLE episodes (
     bit_offsets smallint[],
     content text
 ) INHERITS (entities) WITH (OIDS = FALSE);
+
+REVOKE ALL ON TABLE episodes FROM PUBLIC;
+GRANT SELECT, INSERT, UPDATE ON TABLE episodes TO geekspeak_org;
 
 COMMENT ON TABLE episodes IS
 'Radio show and podcast episodes.';
@@ -242,10 +288,22 @@ CREATE TABLE participants (
     UNIQUE(episode, person)
 ) INHERITS (entities) WITH (OIDS = FALSE);
 
+REVOKE ALL ON TABLE participants FROM PUBLIC;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE participants TO geekspeak_org;
+
 CREATE INDEX episodes_published_idx ON episodes USING btree (published DESC NULLS LAST);
 
-CREATE INDEX sessions_expires_for_reset_idx ON sessions
-USING btree (expires DESC NULLS LAST, for_reset NULLS FIRST);
+COMMENT ON TABLE participants IS
+'The people involved in the making, editing, and publishing of an episode.';
+
+COMMENT ON COLUMN participants.episode IS
+'The episode the participant is assisting on.';
+
+COMMENT ON COLUMN participants.person IS
+'Who is assisting on the episode.';
+
+COMMENT ON COLUMN participants.roles IS
+'What role(s) they are playing; how they are assisting.';
 
 CREATE TABLE headlines (
     id serial NOT NULL PRIMARY KEY,
@@ -254,7 +312,7 @@ CREATE TABLE headlines (
     https boolean DEFAULT false NOT NULL,
     url text NOT NULL UNIQUE,
     locale character varying(5) NOT NULL DEFAULT 'en',
-    title character varying(126) NOT NULL DEFAULT 'UNTITLED',
+    title character varying(126),
     description text,
     metadata jsonb NOT NULL,
     discussion text,
@@ -269,12 +327,18 @@ CREATE TABLE headlines (
     favicon text
 );
 
+REVOKE ALL ON TABLE headlines FROM PUBLIC;
+GRANT SELECT, INSERT, UPDATE ON TABLE headlines TO geekspeak_org;
+
 COMMENT ON TABLE headlines IS
 'Raw article information. Should be purged if deemed sufficiently old and not incorporated into an
  episode.';
 
 COMMENT ON COLUMN headlines.source IS
 'e.g., New York Times, Wired, BBC';
+
+COMMENT ON COLUMN headlines.author IS
+'Author of the linked article. (Not one of the geeks.)';
 
 COMMENT ON COLUMN headlines.url IS
 'URL without a protocol so that an https:// link is not considered distinct from http://.';
@@ -307,6 +371,9 @@ COMMENT ON COLUMN headlines.teaser_image IS
 COMMENT ON COLUMN headlines.content IS
 'Page content; used for search.';
 
+COMMENT ON COLUMN headlines.content_type IS
+'E.g., article, video';
+
 COMMENT ON COLUMN headlines.summary IS
 'Not used currently. Placeholder for Chandler''s article summary algorithm.';
 
@@ -324,6 +391,9 @@ CREATE TABLE bit_templates (
     read_only_message text,
     "order" real DEFAULT 0 NOT NULL
 ) INHERITS (entities) WITH (OIDS = FALSE);
+
+REVOKE ALL ON TABLE bit_templates FROM PUBLIC;
+GRANT SELECT ON TABLE bit_templates TO geekspeak_org;
 
 COMMENT ON TABLE bit_templates IS
 'Some of the bits are recurrent parts of the script and thus need to be reproduced and updated for
@@ -353,6 +423,9 @@ CREATE TABLE bits (
     reference_default smallint REFERENCES bit_templates(id) ON UPDATE CASCADE ON DELETE SET NULL,
     fts tsvector
 ) INHERITS (entities) WITH (OIDS = FALSE);
+
+REVOKE ALL ON TABLE bits FROM PUBLIC;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE bits TO geekspeak_org;
 
 COMMENT ON TABLE bits IS
 'Bits of an episodes ranging from show script items to blurbs to news headlines.';
@@ -397,10 +470,8 @@ LANGUAGE sql STRICT LEAKPROOF AS $$
                                article->>'url'),
            article->>'description',
            coalesce(string_to_array(article->>'keywords', ',', '')::varchar[], '{}'::varchar[]),
-           jsonb_object('{type,locale}'::text[],
-                    array[
-                      coalesce(article->>'og_type', 'article'::text),
-                      coalesce(article->>'og_locale', article->>'locale', 'en'::text)]),
+           article::jsonb - 'content' - 'og_type' - 'og_locale' - 'description' - 'og_title'
+                          - 'source' - 'url' - 'canonical' - 'og_image' - 'shortcut_icon',
            position('https://' in coalesce(article->>'canonical', article->>'url')) = 0,
            coalesce(article->>'og_image', article->>'twitter_image', article->>'shortcut_icon',
                     '/favicon.ico'::text),
@@ -415,10 +486,10 @@ $$;
 COMMENT ON FUNCTION add_headline_bit(article json, submitter integer) IS
 'Add a bit with a link, specifying the submitter by user ID.';
 
-CREATE FUNCTION add_headline_bit(article json, nonce uuid) RETURNS integer
-LANGUAGE sql STABLE STRICT LEAKPROOF AS $$
+CREATE FUNCTION add_headline_bit(article json, session_id uuid) RETURNS integer
+LANGUAGE sql STRICT LEAKPROOF AS $$
   SELECT add_headline_bit(article, person)
-    FROM (SELECT person FROM sessions WHERE nonce = nonce AND expires > now()) sessions;
+    FROM (SELECT person FROM sessions WHERE nonce = session_id AND expires > now()) sessions;
 $$;
 
 COMMENT ON FUNCTION add_headline_bit(article json, nonce uuid) IS
@@ -434,20 +505,23 @@ COMMENT ON FUNCTION add_ip(ips inet[], ip inet) IS
 
 CREATE FUNCTION authorize(session_id uuid, ip inet, client text,
                           requirement role DEFAULT 'authenticated'::role) RETURNS boolean
-LANGUAGE sql STRICT LEAKPROOF AS $$-- Keep the session going either way
+LANGUAGE sql STRICT LEAKPROOF SECURITY DEFINER AS $$-- Keep the session going either way
   UPDATE sessions
-    SET expires = now() + (current_setting('geekspeak.session_duration'))::interval,
-        ips = add_ip(ips, ip)
+    SET expires = now() + session_duration(), ips = add_ip(ips, ip)
     WHERE nonce = session_id AND user_agent = client AND for_reset = false AND expires > now();
 
   -- Find out if authorized
   SELECT coalesce(
-    (SELECT p.acls IS NOT NULL
-            AND ((p.acls || '{authenticated}'::role[]) && ARRAY['superuser'::role, requirement])
+    (SELECT a.roles IS NOT NULL
+            AND ((a.roles || '{authenticated}'::role[]) && ARRAY['superuser'::role, requirement])
        FROM sessions AS s
-       INNER JOIN people AS p ON (p.id = s.person)
+       INNER JOIN acls AS a ON (a.id = s.person)
        WHERE s.nonce = session_id), false);
 $$;
+
+ALTER FUNCTION authorize(uuid, inet, text, role) OWNER TO postgres;
+REVOKE ALL ON FUNCTION authorize(uuid, inet, text, role) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION authorize(uuid, inet, text, role) TO geekspeak_org;
 
 CREATE FUNCTION reify_url(https boolean, url character varying) RETURNS character varying
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
@@ -458,7 +532,8 @@ COMMENT ON FUNCTION reify_url(https boolean, url character varying) IS
 'Add protocol to a URL. This is necessary because we want http and https to be considered
  equivalent when determining unique headlines.';
 
-CREATE FUNCTION bits(ordered_bits integer[], OUT id integer, OUT source character varying,
+CREATE FUNCTION bits(ordered_bits integer[],
+                     OUT id integer, OUT source character varying,
                      OUT title character varying, OUT description text,
                      OUT labels character varying[], OUT url character varying,
                      OUT teaser_image character varying, OUT isbn public.ean13,
@@ -507,7 +582,7 @@ COMMENT ON FUNCTION validate_password(pass text) IS
 
 CREATE FUNCTION confirm(session_id uuid, plain_password text, ip inet)
     RETURNS TABLE(person jsonb, nonce uuid)
-LANGUAGE sql STRICT AS $$
+LANGUAGE sql STRICT SECURITY DEFINER AS $$
   -- Set the new password, but only if we're expecting confirmation
   UPDATE people SET encrypted_password = crypt(plain_password, gen_salt('bf', 10))
     WHERE id = (SELECT person
@@ -522,8 +597,7 @@ LANGUAGE sql STRICT AS $$
   -- a session id, not data
   WITH sess AS (
     UPDATE sessions SET nonce = gen_random_uuid(),
-                        expires = now() + current_setting('geekspeak.session_duration')::interval,
-                        for_reset = false
+                        expires = now() + session_duration(), for_reset = false
       WHERE for_reset = true AND nonce = session_id AND ips[1] = ip
       RETURNING nonce, person)
   SELECT jsonb_build_object('email', p.email,
@@ -535,6 +609,10 @@ LANGUAGE sql STRICT AS $$
   WHERE p.id = sess.person
   LIMIT 1;
 $$;
+
+ALTER FUNCTION confirm(uuid, text, inet) OWNER TO postgres;
+REVOKE ALL ON FUNCTION confirm(uuid, text, inet) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION confirm(uuid, text, inet) TO geekspeak_org;
 
 COMMENT ON FUNCTION confirm(session_id uuid, plain_password text, ip inet) IS
 'Confirming valid email address and setting new password. Session is marked no longer for reset,
@@ -728,20 +806,24 @@ LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
 $$;
 
 CREATE OR REPLACE FUNCTION login(email text, plain_password text, ip inet, agent text) RETURNS uuid
-LANGUAGE sql STRICT LEAKPROOF AS $$
+LANGUAGE sql STRICT LEAKPROOF SECURITY DEFINER AS $$
   -- Create a new session or update existing one
 	INSERT INTO sessions (nonce, person, ips, user_agent)
-		(SELECT coalesce(s.nonce, gen_random_uuid()), id, ARRAY[ip], agent
+		(SELECT coalesce(s.nonce, gen_random_uuid()), p.id, ARRAY[ip], agent
 			FROM people AS p
+			LEFT JOIN passwords AS pass ON (p.id = pass.id)
 			LEFT JOIN (SELECT nonce, person FROM sessions
 			           WHERE expires > now() AND user_agent = agent) AS s ON (s.person = p.id)
 			WHERE p.email = email
-				AND p.encrypted_password = crypt(plain_password, p.encrypted_password))
+				AND pass.encrypted_password = crypt(plain_password, pass.encrypted_password))
 	ON CONFLICT (nonce) DO UPDATE
-		 SET ips = add_ip(sessions.ips, ip),
-				 expires = now() + (current_setting('geekspeak.session_duration'))::interval
+		 SET expires = now() + session_duration(), ips = add_ip(sessions.ips, ip)
 	RETURNING nonce
 $$;
+
+ALTER FUNCTION login(text, text, inet, text) OWNER TO postgres;
+REVOKE ALL ON FUNCTION login(text, text, inet, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION login(text, text, inet, text) TO geekspeak_org;
 
 COMMENT ON FUNCTION login(email text, plain_password text, ip inet, agent text) IS
 'Authenticate the user by email, password. IP address and user agent are saved as part of the
@@ -749,16 +831,20 @@ COMMENT ON FUNCTION login(email text, plain_password text, ip inet, agent text) 
  same browser will reuse an existing valid session to avoid session bloat.';
 
 CREATE FUNCTION logout(session_id uuid, ip inet) RETURNS void
-LANGUAGE sql STRICT LEAKPROOF AS $$
+LANGUAGE sql STRICT LEAKPROOF SECURITY DEFINER AS $$
   UPDATE sessions SET expires = greatest(created, now() + interval '-1 second'),
                       ips = add_ip(ips, ip)
     WHERE nonce = session_id AND expires > now();
 $$;
 
+ALTER FUNCTION logout(uuid, inet) OWNER TO postgres;
+REVOKE ALL ON FUNCTION logout(uuid, inet) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION logout(uuid, inet) TO geekspeak_org;
+
 COMMENT ON FUNCTION logout(nonce uuid, ip inet) IS 'Invalidate the current session.';
 
 CREATE FUNCTION mime_type(file_ext text) RETURNS character varying
-LANGUAGE sql IMMUTABLE LEAKPROOF AS $$
+LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT CASE
   -- images
   WHEN file_ext = 'png' THEN 'image/png'
@@ -785,7 +871,6 @@ LANGUAGE sql IMMUTABLE LEAKPROOF AS $$
   -- fallthrough
   ELSE 'application/x-binary'
 END $$;
-
 
 COMMENT ON FUNCTION mime_type(file_ext text) IS
 'Get the MIME type from the file extension.';
@@ -821,7 +906,7 @@ LANGUAGE plpgsql STRICT LEAKPROOF AS $$
 
   IF result IS NOT NULL THEN
     UPDATE sessions
-      SET expires = now() + current_setting('geekspeak.session_duration')::interval, ips = add_ip(ips, ip)
+      SET expires = now() + session_duration(), ips = add_ip(ips, ip)
       WHERE nonce = nonce AND expires > now();
   END IF;
 
@@ -849,25 +934,33 @@ Currently handles:
 ';
 
 CREATE FUNCTION recover(email text, ip inet, user_agent text) RETURNS void
-LANGUAGE sql STABLE STRICT AS $$
+LANGUAGE sql STRICT SECURITY DEFINER AS $$
   INSERT INTO sessions (nonce, person, for_reset, ips)
     (SELECT gen_random_uuid(), id, true, array[ip]
        FROM people
        WHERE email = email and acls IS NOT NULL);
 $$;
 
+ALTER FUNCTION recover(text, inet, text) OWNER TO postgres;
+REVOKE ALL ON FUNCTION recover(text, inet, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION recover(text, inet, text) TO geekspeak_org;
+
 COMMENT ON FUNCTION recover(email text, ip inet, user_agent text) IS
 'Allows password recovery given a person''s email address, IP address, and user agent.';
 
 CREATE FUNCTION register(email text, ip inet, user_agent text)
     RETURNS void
-LANGUAGE sql AS $$
+LANGUAGE sql STRICT SECURITY DEFINER AS $$
   INSERT into people (email, encrypted_password, display_name)
     VALUES(email, '', regexp_replace(email, '@.+$', ''));
 
   INSERT INTO sessions (nonce, person, for_reset, ips, expires, user_agent)
     VALUES(gen_random_uuid(), lastval(), true, ARRAY[ip], now() + interval '1 hour', user_agent);
 $$;
+
+ALTER FUNCTION register(text, inet, text) OWNER TO postgres;
+REVOKE ALL ON FUNCTION register(text, inet, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION register(text, inet, text) TO geekspeak_org;
 
 COMMENT ON FUNCTION register(email text, ip inet, user_agent text) IS
 'Register a new person with the system. It is expected that the new session ID/nonce will be
@@ -886,78 +979,23 @@ COMMENT ON FUNCTION text(id episode_num) IS
 'Converts an encoded episode number (episode_no/smallint) to a user-readable string in the form
  "s16e04b" where the previous signifies season 16 (2016), episode 4 (week 4), slot b (third slot).';
 
-CREATE FUNCTION update_password(email_addr text, old_pass text, new_pass text) RETURNS text
-LANGUAGE sql STABLE STRICT LEAKPROOF AS $$
-  UPDATE people
+CREATE FUNCTION update_password(email_addr text, old_pass text, new_pass text) RETURNS boolean
+LANGUAGE sql STRICT LEAKPROOF SECURITY DEFINER AS $$
+  WITH p AS (SELECT id FROM people WHERE email = email_addr)
+  UPDATE passwords AS pass
     SET encrypted_password = crypt(new_pass, gen_salt('bf', 10))
-    WHERE email = email_addr AND encrypted_password = crypt(old_pass, encrypted_password)
+    WHERE pass.id = p.id AND encrypted_password = crypt(old_pass, encrypted_password)
           AND validate_password(new_pass)
-    RETURNING email;
+    RETURNING true;
 $$;
+
+ALTER FUNCTION update_password(text, text, text) OWNER TO postgres;
+REVOKE ALL ON FUNCTION update_password(text, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION update_password(text, text, text) TO geekspeak_org;
 
 COMMENT ON FUNCTION update_password(email_addr text, old_pass text, new_pass text) IS
 'Update the password by successfully authenticating with email and old password first. New password
  is subject to password validation as well.';
-
-CREATE SERVER gs_multicorn
-  FOREIGN DATA WRAPPER multicorn
-  OPTIONS (wrapper 'multicorn.fsfdw.FilesystemFdw');
-
-CREATE FOREIGN TABLE episode_audio_fdt (
-    season smallint NOT NULL,
-    episode episode_num NOT NULL,
-    filename character varying NOT NULL)
-  SERVER gs_multicorn
-  OPTIONS (
-    filename_column 'filename',
-    pattern 's{season}e{episode}.mp3',
-    root_dir '/var/www/html/media');
-
-CREATE MATERIALIZED VIEW episode_audio AS
-  SELECT episode_num(episode_audio_fdt.season,
-         (episode_audio_fdt.episode)::smallint) AS episode_num,
-         'audio/mpeg'::character varying AS mime_type
-    FROM episode_audio_fdt
-  WITH NO DATA;
-
-CREATE FOREIGN TABLE episode_files_fdt (
-    season character(2) NOT NULL,
-    episode character(2) NOT NULL,
-    name character varying NOT NULL,
-    ext character varying(4) NOT NULL,
-    filename character varying NOT NULL,
-    content bytea NOT NULL)
-  SERVER gs_multicorn
-  OPTIONS (
-    content_column 'content',
-    filename_column 'filename',
-    pattern 's{season}e{episode}-{name}.{ext}',
-    root_dir '/var/www/html/media');
-
-CREATE FOREIGN TABLE episode_intrinsics_fdt (
-    season smallint NOT NULL,
-    episode episode_num NOT NULL,
-    filename character varying NOT NULL,
-    filetype character varying(4) NOT NULL,
-    content bytea NOT NULL)
-  SERVER gs_multicorn
-  OPTIONS (
-    content_column 'content',
-    filename_column 'filename',
-    pattern 's{season}e{episode}.{filetype}',
-    root_dir '/var/www/html/media');
-
-CREATE FOREIGN TABLE episode_media_fdt (
-    basename character varying NOT NULL,
-    filename character varying NOT NULL,
-    filetype character varying(4) NOT NULL,
-    content bytea NOT NULL)
-  SERVER gs_multicorn
-  OPTIONS (
-    content_column 'content',
-    filename_column 'filename',
-    pattern '{basename}.{filetype}',
-    root_dir '/var/www/html/media');
 
 CREATE TRIGGER headlines_fulltextsearch BEFORE UPDATE ON headlines
   FOR EACH ROW EXECUTE PROCEDURE headlines_fts();
@@ -987,3 +1025,74 @@ CREATE TRIGGER participants_modified BEFORE UPDATE ON participants
 
 CREATE TRIGGER people_modified BEFORE UPDATE ON people
   FOR EACH ROW EXECUTE PROCEDURE modified();
+
+--
+-- Set up reference directories relative to system configuration
+--
+SELECT set_config('geekspeak.docroot',
+                  coalesce(current_setting('geekspeak.docroot', true)
+                           '/var/www/geekspeak.org'),
+                  true);
+
+SELECT set_config('geekspeak.mediaroot',
+                  coalesce(current_setting('geekspeak.mediaroot', true)
+                           current_setting('geekspeak.docroot') || '/media'),
+                  true);
+
+CREATE SERVER gs_multicorn
+  FOREIGN DATA WRAPPER multicorn
+  OPTIONS (wrapper 'multicorn.fsfdw.FilesystemFdw');
+
+COMMENT ON SERVER gs_multicorn IS
+'Filesystem access for media files.';
+
+CREATE FOREIGN TABLE episode_media_fdt (
+    season smallint NOT NULL,
+    episode smallint NOT NULL,
+    ext character varying NOT NULL,
+    filename character varying NOT NULL)
+  SERVER gs_multicorn
+  OPTIONS (
+    filename_column 'filename',
+    pattern 's{season}e{episode}.{ext}',
+    root_dir current_setting('geekspeak.mediaroot');
+
+COMMENT ON FOREIGN TABLE episode_media_fdt IS
+'Intrinsic episode files such as the teaser image and podcast audio.';
+
+CREATE FOREIGN TABLE episode_misc_fdt (
+    season smallint NOT NULL,
+    episode smallint NOT NULL,
+    name text NOT NULL,
+    filename character varying NOT NULL)
+  SERVER gs_multicorn
+  OPTIONS (
+    filename_column 'filename',
+    pattern 's{season}e{episode} {name}',
+    root_dir current_setting('geekspeak.mediaroot');
+
+COMMENT ON FOREIGN TABLE episode_misc_fdt IS
+'Files attached to the episode, such as images, videos, and documents like PDF.';
+
+CREATE MATERIALIZED VIEW episode_media AS
+  SELECT episode_num(episode_audio_fdt.season,
+                     episode_audio_fdt.episode)::smallint) AS num,
+         filename,
+         NULL::text AS name,
+         mime_type(substring(filename FROM 2)) AS mime_type
+    FROM episode_media_fdt
+  UNION ALL
+  SELECT episode_num(episode_audio_fdt.season,
+                     episode_audio_fdt.episode)::smallint) AS num,
+         filename,
+         name AS name,
+         mime_type(regexp_matches(name, '[^.]+$')[0]) AS mime_type
+    FROM episode_misc_fdt
+  WITH NO DATA;
+
+REVOKE ALL ON MATERIALIZED VIEW episode_media FROM PUBLIC;
+GRANT SELECT ON MATERIALIZED VIEW episode_media TO geekspeak_org;
+
+COMMENT ON MATERIALIZED VIEW episode_media IS
+'Fast, cached access to filesystem entries via foreign tables episode_media_fdt and
+ episode_misc_fdt.';
