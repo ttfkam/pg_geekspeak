@@ -1043,7 +1043,7 @@ CREATE SERVER gs_multicorn
   FOREIGN DATA WRAPPER multicorn
   OPTIONS (wrapper 'multicorn.fsfdw.FilesystemFdw');
 
-COMMENT ON SERVER gs_multicorn IS
+COMMENT ON FOREIGN SERVER gs_multicorn IS
 'Filesystem access for media files.';
 
 CREATE FOREIGN TABLE episode_media_fdt (
