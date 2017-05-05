@@ -81,7 +81,7 @@ REVOKE ALL ON TABLE passwords FROM PUBLIC;
 
 COMMENT ON TABLE passwords IS
 'Passwords pulled out of people for both database security and to set precedent for allowing other
- authentication types like Google auth or SSL client certs. Also, passwords suck.'
+ authentication types like Google auth or SSL client certs. Also, passwords suck.';
 
 COMMENT ON COLUMN passwords.encrypted_password IS
 'Salted Blowfish. Access through login(email, password, IP, user agent), not directly.';
@@ -1043,7 +1043,7 @@ CREATE SERVER gs_multicorn
   FOREIGN DATA WRAPPER multicorn
   OPTIONS (wrapper 'multicorn.fsfdw.FilesystemFdw');
 
-COMMENT ON FOREIGN SERVER gs_multicorn IS
+COMMENT ON SERVER gs_multicorn IS
 'Filesystem access for media files.';
 
 CREATE FOREIGN TABLE episode_media_fdt (
