@@ -1030,13 +1030,13 @@ CREATE TRIGGER people_modified BEFORE UPDATE ON people
 -- Set up reference directories relative to system configuration
 --
 SELECT set_config('geekspeak.docroot',
-                  coalesce(current_setting('geekspeak.docroot', true)
-                           '/var/www/geekspeak.org'),
+                  coalesce(current_setting('geekspeak.docroot', true)::text
+                           '/var/www/geekspeak.org'::text),
                   true);
 
 SELECT set_config('geekspeak.mediaroot',
-                  coalesce(current_setting('geekspeak.mediaroot', true)
-                           current_setting('geekspeak.docroot') || '/media'),
+                  coalesce(current_setting('geekspeak.mediaroot', true)::text
+                           current_setting('geekspeak.docroot')::text || '/media'::text),
                   true);
 
 CREATE SERVER gs_multicorn
