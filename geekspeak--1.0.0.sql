@@ -1080,7 +1080,7 @@ CREATE MATERIALIZED VIEW episode_media AS
                      episode_media_fdt.episode) AS num,
          filename,
          NULL::text AS name,
-         mime_type(substring(filename FROM 2)) AS mime_type
+         mime_type(substring(filename FROM 8)) AS mime_type
     FROM episode_media_fdt
   UNION ALL
   SELECT episode_num(episode_misc_fdt.season,
