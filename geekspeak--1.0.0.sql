@@ -213,7 +213,7 @@ CREATE TABLE episodes (
     published timestamptz,
     recorded tstzrange NOT NULL,
     location smallint NOT NULL REFERENCES locations(id) ON UPDATE CASCADE ON DELETE RESTRICT,
-    num episode_num NOT NULL UNIQUE,
+    num episode_num UNIQUE,
     guid_override uuid,
     title character varying(126),
     promo text,
@@ -388,7 +388,7 @@ CREATE TABLE bit_templates (
     id smallserial NOT NULL PRIMARY KEY,
     title character varying(126) NOT NULL,
     description text,
-    read_only_message text,
+    public boolean DEFAULT false NOT NULL,
     "order" real DEFAULT 0 NOT NULL
 ) INHERITS (entities) WITH (OIDS = FALSE);
 
@@ -405,8 +405,8 @@ COMMENT ON COLUMN bit_templates.title IS
 COMMENT ON COLUMN bit_templates.description IS
 'Script content.';
 
-COMMENT ON COLUMN bit_templates.read_only_message IS
-'Script immutable content.';
+COMMENT ON COLUMN bit_templates.public IS
+'Whether content is visible to website visitors.';
 
 COMMENT ON COLUMN bit_templates."order" IS
 'Script content order.';
@@ -415,12 +415,13 @@ CREATE TABLE bits (
     id serial NOT NULL PRIMARY KEY,
     title character varying(126),
     description text,
+    tags character varying(126)[],
     headline integer REFERENCES headlines(id) ON UPDATE CASCADE ON DELETE RESTRICT,
     owner integer NOT NULL REFERENCES people(id) ON UPDATE CASCADE ON DELETE RESTRICT,
     episode integer REFERENCES episodes(id) ON UPDATE CASCADE ON DELETE RESTRICT,
     isbn public.ean13,
     public boolean DEFAULT true NOT NULL,
-    reference_default smallint REFERENCES bit_templates(id) ON UPDATE CASCADE ON DELETE SET NULL,
+    template smallint REFERENCES bit_templates(id) ON UPDATE CASCADE ON DELETE SET NULL,
     fts tsvector
 ) INHERITS (entities) WITH (OIDS = FALSE);
 
@@ -429,6 +430,15 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE bits TO geekspeak_org;
 
 COMMENT ON TABLE bits IS
 'Bits of an episodes ranging from show script items to blurbs to news headlines.';
+
+COMMENT ON COLUMN bits.title IS
+'Bit title, usually to override the associated headline''s title.';
+
+COMMENT ON COLUMN bits.description IS
+'Bit description, usually to override the associated headline''s description.';
+
+COMMENT ON COLUMN bits.tags IS
+'Search tags.';
 
 COMMENT ON COLUMN bits.headline IS
 'Reference to an aggregator headline for show news. If it is missing, it''s assumed to be a blurb
@@ -440,7 +450,7 @@ COMMENT ON COLUMN bits.isbn IS
 COMMENT ON COLUMN bits.public IS
 'Whether the info is for public display or just for show notes.';
 
-COMMENT ON COLUMN bits.reference_default IS
+COMMENT ON COLUMN bits.template IS
 'Reference to the bit template so that it can be updated automatically, such as when a new show
  participant joins.';
 
@@ -886,7 +896,7 @@ $$;
 CREATE FUNCTION episode_part_modified() RETURNS trigger
 LANGUAGE plpgsql AS $$
   BEGIN
-  UPDATE episodes SET modified = now() WHERE id = OLD.episode OR id = NEW.episode;
+  UPDATE episodes SET modified = now() WHERE id = NEW.episode;
   RETURN NEW;
   END;
 $$;
