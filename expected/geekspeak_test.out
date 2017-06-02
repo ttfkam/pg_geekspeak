@@ -182,9 +182,9 @@ SELECT http('2016-04-01 16:20'::timestamptz AT TIME ZONE 'US/Pacific');
 (1 row)
 
 SELECT http('Fri, 01 Apr 2016 16:20:00');
-           http           
---------------------------
- Fri Apr 01 16:20:00 2016
+             http             
+------------------------------
+ Fri Apr 01 16:20:00 2016 PDT
 (1 row)
 
 --
