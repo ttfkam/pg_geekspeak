@@ -9,6 +9,7 @@
 \echo Use "CREATE EXTENSION geekspeak" to load this file. \quit
 
 CREATE TABLE entities (
+    hash bytea,
     created timestamptz DEFAULT now() NOT NULL,
     modified timestamptz DEFAULT now() NOT NULL
 );
@@ -55,7 +56,7 @@ CREATE TABLE people (
     display_name character varying(126),
     bio text,
     description character varying(126)
-) INHERITS (entities) WITH (OIDS = FALSE);
+) INHERITS (entities);
 
 REVOKE ALL ON TABLE people FROM PUBLIC;
 GRANT SELECT, INSERT, UPDATE ON TABLE people TO geekspeak_org;
@@ -72,10 +73,13 @@ COMMENT ON COLUMN people.display_name IS
 COMMENT ON COLUMN people.description IS
 'How you want to be introduced on the show';
 
+--
+-- Allow fallback to password authentication, but do not include them in the people table.
+--
 CREATE TABLE passwords (
     id int4 NOT NULL UNIQUE REFERENCES people(id) ON UPDATE CASCADE ON DELETE CASCADE,
     encrypted_password character(60) NOT NULL
-) INHERITS (entities) WITH (OIDS = FALSE);
+) INHERITS (entities);
 
 REVOKE ALL ON TABLE passwords FROM PUBLIC;
 
@@ -86,19 +90,25 @@ COMMENT ON TABLE passwords IS
 COMMENT ON COLUMN passwords.encrypted_password IS
 'Salted Blowfish. Access through login(email, password, IP, user agent), not directly.';
 
+--
+-- User authorization roles.
+--
 CREATE TABLE acls (
     id int4 NOT NULL UNIQUE REFERENCES people(id) ON UPDATE CASCADE ON DELETE CASCADE,
     roles role[] NOT NULL
-) INHERITS (entities) WITH (OIDS = FALSE);
+) INHERITS (entities);
 
 REVOKE ALL ON TABLE acls FROM PUBLIC;
 
 COMMENT ON TABLE acls IS
 'ACLs pulled out of people for database security.';
 
+--
+-- Easy access to a configurable session duration
+--
 CREATE FUNCTION session_duration() RETURNS interval
 LANGUAGE sql STABLE STRICT LEAKPROOF AS $$
-  SELECT coalesce(current_setting('geekspeak.session_duration', true), '8 days')::interval
+  SELECT coalesce(current_setting('geekspeak.session_duration', true), '1 month')::interval
 $$;
 
 --
@@ -107,12 +117,11 @@ $$;
 CREATE TABLE sessions (
     nonce uuid NOT NULL PRIMARY KEY,
     person integer NOT NULL REFERENCES people(id) ON UPDATE CASCADE ON DELETE RESTRICT,
-    expires timestamptz
-        DEFAULT (now() + session_duration()) NOT NULL,
+    expires timestamptz DEFAULT (now() + session_duration()) NOT NULL,
     for_reset boolean DEFAULT false NOT NULL,
     ips inet[] NOT NULL,
     user_agent character varying DEFAULT ''::character varying NOT NULL
-) INHERITS (entities) WITH (OIDS = FALSE);
+) INHERITS (entities);
 
 REVOKE ALL ON TABLE sessions FROM PUBLIC;
 GRANT SELECT ON TABLE sessions TO geekspeak_audit;
@@ -224,7 +233,7 @@ CREATE TABLE episodes (
     bit_order integer[],
     bit_offsets smallint[],
     content text
-) INHERITS (entities) WITH (OIDS = FALSE);
+) INHERITS (entities);
 
 REVOKE ALL ON TABLE episodes FROM PUBLIC;
 GRANT SELECT, INSERT, UPDATE ON TABLE episodes TO geekspeak_org;
@@ -286,7 +295,7 @@ CREATE TABLE participants (
     person integer NOT NULL REFERENCES people(id) ON UPDATE CASCADE ON DELETE RESTRICT,
     roles role[] NOT NULL,
     UNIQUE(episode, person)
-) INHERITS (entities) WITH (OIDS = FALSE);
+) INHERITS (entities);
 
 REVOKE ALL ON TABLE participants FROM PUBLIC;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE participants TO geekspeak_org;
@@ -305,6 +314,9 @@ COMMENT ON COLUMN participants.person IS
 COMMENT ON COLUMN participants.roles IS
 'What role(s) they are playing; how they are assisting.';
 
+--
+-- News headlines that we cover on the show
+--
 CREATE TABLE headlines (
     id serial NOT NULL PRIMARY KEY,
     source character varying(126),
@@ -325,7 +337,7 @@ CREATE TABLE headlines (
     content_type character varying(15) DEFAULT 'article',
     summary text,
     favicon text
-);
+) INHERITS (entities);
 
 REVOKE ALL ON TABLE headlines FROM PUBLIC;
 GRANT SELECT, INSERT, UPDATE ON TABLE headlines TO geekspeak_org;
@@ -384,13 +396,16 @@ CREATE INDEX added_idx ON headlines USING btree (added DESC NULLS LAST);
 
 CREATE INDEX fts_idx ON headlines USING gin (fts);
 
+--
+-- Recurrent bits, commonly show script segments
+--
 CREATE TABLE bit_templates (
     id smallserial NOT NULL PRIMARY KEY,
     title character varying(126) NOT NULL,
     description text,
     public boolean DEFAULT false NOT NULL,
     "order" real DEFAULT 0 NOT NULL
-) INHERITS (entities) WITH (OIDS = FALSE);
+);
 
 REVOKE ALL ON TABLE bit_templates FROM PUBLIC;
 GRANT SELECT ON TABLE bit_templates TO geekspeak_org;
@@ -411,6 +426,9 @@ COMMENT ON COLUMN bit_templates.public IS
 COMMENT ON COLUMN bit_templates."order" IS
 'Script content order.';
 
+--
+-- Show segments including script segments, news headlines, book/video recommendations, etc.
+--
 CREATE TABLE bits (
     id serial NOT NULL PRIMARY KEY,
     title character varying(126),
@@ -423,7 +441,7 @@ CREATE TABLE bits (
     public boolean DEFAULT true NOT NULL,
     template smallint REFERENCES bit_templates(id) ON UPDATE CASCADE ON DELETE SET NULL,
     fts tsvector
-) INHERITS (entities) WITH (OIDS = FALSE);
+) INHERITS (entities);
 
 REVOKE ALL ON TABLE bits FROM PUBLIC;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE bits TO geekspeak_org;
@@ -461,6 +479,9 @@ COMMENT ON COLUMN bits.fts IS
 CREATE UNIQUE INDEX episode_headline_udx ON bits
   USING btree (episode DESC NULLS LAST, headline DESC NULLS LAST);
 
+--
+-- News source, e.g., New York Times, Ars Technica
+--
 CREATE FUNCTION source(source text, url text) RETURNS text
 LANGUAGE sql IMMUTABLE LEAKPROOF AS $$
   SELECT coalesce(source, regexp_replace(url, '^(?:https?:)?//(?:www\.)?([^/]+)/.+$', '\1'));
@@ -469,6 +490,9 @@ $$;
 COMMENT ON FUNCTION source(source text, url text) IS
 'Provide a headline''s source either by explicit value or by using the domain name.';
 
+--
+-- Add headline to the system and associate it with an episode via bit
+--
 CREATE FUNCTION add_headline_bit(article json, submitter integer) RETURNS integer
 LANGUAGE sql STRICT LEAKPROOF AS $$
   WITH hl AS (
@@ -496,6 +520,9 @@ $$;
 COMMENT ON FUNCTION add_headline_bit(article json, submitter integer) IS
 'Add a bit with a link, specifying the submitter by user ID.';
 
+--
+-- Add headline via bit to episode through authenticated REST interface
+--
 CREATE FUNCTION add_headline_bit(article json, session_id uuid) RETURNS integer
 LANGUAGE sql STRICT LEAKPROOF AS $$
   SELECT add_headline_bit(article, person)
@@ -505,6 +532,9 @@ $$;
 COMMENT ON FUNCTION add_headline_bit(article json, nonce uuid) IS
 'Add a bit with a link, specifying the submitter by nonce (session ID).';
 
+--
+-- Utility method to collate IPs. To be used for log analysis for abuse, DoS, etc.
+--
 CREATE FUNCTION add_ip(ips inet[], ip inet) RETURNS inet[]
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT CASE WHEN ips[array_upper(ips, 1)] = ip THEN ips ELSE ips || ARRAY[ip] END;
@@ -513,14 +543,12 @@ $$;
 COMMENT ON FUNCTION add_ip(ips inet[], ip inet) IS
 'Appends a new IP address to a list if the last entry is not the same IP. Note: IPv6-safe.';
 
+--
+-- Compare logged in user to rights required
+--
 CREATE FUNCTION authorize(session_id uuid, ip inet, client text,
                           requirement role DEFAULT 'authenticated'::role) RETURNS boolean
-LANGUAGE sql STRICT LEAKPROOF SECURITY DEFINER AS $$-- Keep the session going either way
-  UPDATE sessions
-    SET expires = now() + session_duration(), ips = add_ip(ips, ip)
-    WHERE nonce = session_id AND user_agent = client AND for_reset = false AND expires > now();
-
-  -- Find out if authorized
+LANGUAGE sql STRICT LEAKPROOF SECURITY DEFINER AS $$
   SELECT coalesce(
     (SELECT a.roles IS NOT NULL
             AND ((a.roles || '{authenticated}'::role[]) && ARRAY['superuser'::role, requirement])
@@ -533,6 +561,11 @@ ALTER FUNCTION authorize(uuid, inet, text, role) OWNER TO postgres;
 REVOKE ALL ON FUNCTION authorize(uuid, inet, text, role) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION authorize(uuid, inet, text, role) TO geekspeak_org;
 
+--
+-- http vs https usually doesn't signify different content, so we only store a protocol-free
+-- URL and allow protocol security to be toggled. This function reverses the process, appending
+-- the protocol back again.
+--
 CREATE FUNCTION reify_url(https boolean, url character varying) RETURNS character varying
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT CASE WHEN https THEN 'https:' ELSE 'http:' END || url;
@@ -542,6 +575,9 @@ COMMENT ON FUNCTION reify_url(https boolean, url character varying) IS
 'Add protocol to a URL. This is necessary because we want http and https to be considered
  equivalent when determining unique headlines.';
 
+--
+-- Convenience function to aggregate bits in episode JSON
+--
 CREATE FUNCTION bits(ordered_bits integer[],
                      OUT id integer, OUT source character varying,
                      OUT title character varying, OUT description text,
@@ -561,12 +597,18 @@ LANGUAGE sql STABLE STRICT LEAKPROOF AS $$
     ORDER BY bo.row_num ASC NULLS LAST;
 $$;
 
+--
+-- JSON output equivalent of bits(integer[])
+--
 CREATE FUNCTION bits_as_json(ordered_bits integer[]) RETURNS jsonb
 LANGUAGE sql STABLE STRICT LEAKPROOF AS $$
   SELECT jsonb_agg(bits)
     FROM bits(ordered_bits) AS bits;
 $$;
 
+--
+-- Convert raw, Google-style queries to valid full text search query syntax
+--
 CREATE FUNCTION clean_query(query text) RETURNS text
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   WITH raw_query AS
@@ -578,6 +620,9 @@ $$;
 COMMENT ON FUNCTION clean_query(query text) IS
 'Convert the user search query into something the full text search query engine can handle.';
 
+--
+-- Enforce basic password hygiene
+--
 CREATE FUNCTION validate_password(pass text) RETURNS boolean
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT length(trim(pass)) >= 8
@@ -590,6 +635,9 @@ $$;
 COMMENT ON FUNCTION validate_password(pass text) IS
 'Verifies the passwords meets or exceeds minimum strength requirements.';
 
+--
+-- Confirm registration for password-based authentication
+--
 CREATE FUNCTION confirm(session_id uuid, plain_password text, ip inet)
     RETURNS TABLE(person jsonb, nonce uuid)
 LANGUAGE sql STRICT SECURITY DEFINER AS $$
@@ -628,6 +676,9 @@ COMMENT ON FUNCTION confirm(session_id uuid, plain_password text, ip inet) IS
 'Confirming valid email address and setting new password. Session is marked no longer for reset,
  and the expiry is pushed out.';
 
+--
+-- Easy aggregation of participants for episode JSON output
+--
 CREATE FUNCTION participants_as_json(episode_num episode_num) RETURNS jsonb
 LANGUAGE sql STABLE STRICT LEAKPROOF AS $$
   SELECT jsonb_agg(jsonb_build_object('person', u.display_name, 'description', u.description,
@@ -638,23 +689,36 @@ LANGUAGE sql STABLE STRICT LEAKPROOF AS $$
     WHERE e.num = episode_num
 $$;
 
-CREATE FUNCTION episode_as_json(episode episode_num, lastmod timestamptz,
-                                OUT json jsonb, OUT modified timestamptz)
+--
+-- Generation of etag from current entity hash
+--
+CREATE FUNCTION etag(hash bytea) RETURNS text
+LANGUAGE sql IMMUTABLE LEAKPROOF AS $$
+  SELECT encode(substring(hash for 3), 'hex')
+$$;
+
+--
+-- Direct to REST interface for episodes
+--
+CREATE FUNCTION episode_as_json(episode episode_num, INOUT etag text, OUT json jsonb)
                                 RETURNS record
 LANGUAGE sql STABLE LEAKPROOF AS $$
-  (SELECT jsonb_build_object('episode', num, 'title', title, 'promo', promo,
+  (SELECT etag(hash) as etag,
+          jsonb_build_object('episode', num, 'title', title, 'promo', promo,
                              'description', description, 'transcript', transcript,
                              'published', published, 'labels', tags,
                              'bits', bits_as_json(bit_order), 'content', content,
-                             'participants', participants_as_json(episode)) AS json,
-          modified
+                             'participants', participants_as_json(episode)) AS json
     FROM episodes
-    WHERE num = episode AND (lastmod IS NULL OR date_trunc('second', modified) <> lastmod)
+    WHERE num = episode AND (etag IS NULL OR etag <> etag(hash))
   UNION ALL
-  SELECT NULL::jsonb, lastmod)
+  SELECT etag, NULL::jsonb)
   LIMIT 1;
 $$;
 
+--
+-- Guesstimate the current season/episode from the airdate
+--
 CREATE FUNCTION episode_num(airdate date DEFAULT ('now'::text)::date) RETURNS episode_num
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT (((extract(YEAR FROM airdate)::smallint
@@ -665,6 +729,9 @@ $$;
 COMMENT ON FUNCTION episode_num(airdate date) IS
 'Converts a date to a season and episode number.';
 
+--
+-- Convert season/episode to single smallint
+--
 CREATE FUNCTION episode_num(season integer, episode integer) RETURNS episode_num
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT ((season << 9) + episode)::episode_num;
@@ -673,6 +740,9 @@ $$;
 COMMENT ON FUNCTION episode_num(season integer, episode integer) IS
 'Encodes the season and episode into an episode_num (smallint)';
 
+--
+-- Trigger to populate episode full text search vector
+--
 CREATE FUNCTION episodes_fts() RETURNS trigger
 LANGUAGE plpgsql AS $$
   BEGIN
@@ -688,6 +758,9 @@ COMMENT ON FUNCTION episodes_fts() IS
 'Make sure the full text search (FTS) vector is updated for the search index whenever a change is
  made to the episode.';
 
+--
+-- Autogen/fix favicon URL for headlines if necessary
+--
 CREATE FUNCTION favicon() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$
   BEGIN
@@ -702,6 +775,9 @@ $$;
 COMMENT ON FUNCTION favicon() IS
 'Convert relative favicon URLs to fully qualified URLs.';
 
+--
+-- Like clean_query(...)
+--
 CREATE FUNCTION format_query(query text, dict regconfig DEFAULT 'english'::regconfig)
 RETURNS tsquery
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
@@ -717,6 +793,9 @@ $$;
 COMMENT ON FUNCTION format_query(query text, dict regconfig) IS
 'Sanitizes input to allow easier boolean searches. Takes an optional dictionary configuration.';
 
+--
+-- Reduce search result prominence due to age
+--
 CREATE FUNCTION rank_modifier(age interval) RETURNS real
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   -- 60 seconds * 60 minutes * 24 hours * 7 days
@@ -726,6 +805,9 @@ $$;
 COMMENT ON FUNCTION rank_modifier(age interval) IS
 'Older stuff should be less likely to show up in search results.';
 
+--
+-- Reduce search result prominence due to age
+--
 CREATE FUNCTION rank_modifier(moment timestamptz DEFAULT now()) RETURNS real
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT rank_modifier(now() - moment);
@@ -734,6 +816,9 @@ $$;
 COMMENT ON FUNCTION rank_modifier(moment timestamptz) IS
 'Older stuff should be less likely to show up in search results.';
 
+--
+-- Headline search
+--
 CREATE FUNCTION headlines(since interval DEFAULT '7 days'::interval,
                           querytext text DEFAULT ''::text,
                           min_rank real DEFAULT 0.1,
@@ -772,6 +857,9 @@ COMMENT ON FUNCTION headlines(since interval, querytext text, min_rank real, lim
                               oset integer) IS
 'Browse and search incoming news headlines.';
 
+--
+-- Headline search returning results as JSON
+--
 CREATE FUNCTION headlines_as_json(since interval DEFAULT '7 days'::interval,
                                   query text DEFAULT ''::text, min_rank real DEFAULT 1.0,
                                   lim integer DEFAULT 2000, oset integer DEFAULT 0) RETURNS jsonb
@@ -784,6 +872,9 @@ COMMENT ON FUNCTION headlines_as_json(since interval, query text, min_rank real,
                                       oset integer) IS
 'Browse and search incoming news headlines, returning them as JSON.';
 
+--
+-- Headline inserts/updates configured for full text search
+--
 CREATE FUNCTION headlines_fts() RETURNS trigger
 LANGUAGE plpgsql AS $$
   BEGIN
@@ -800,21 +891,33 @@ COMMENT ON FUNCTION headlines_fts() IS
 'Make sure the full text search (FTS) vector is updated for the search index whenever a change is
  made to the headline.';
 
+--
+-- Convert PostgreSQL timestamps with timezone to HTTP date format
+--
 CREATE FUNCTION http(ts timestamptz) RETURNS text
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT http(ts::timestamp);
 $$;
 
+--
+-- Convert PostgreSQL timestamps to HTTP date format
+--
 CREATE FUNCTION http(ts timestamp) RETURNS text
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT to_char(ts, 'Dy, DD Mon YYYY HH24:MI:SS');
 $$;
 
-CREATE FUNCTION http(ts text) RETURNS timestamp
+--
+-- Convert HTTP date format to PostgreSQL timestamps
+--
+CREATE FUNCTION http(ts text) RETURNS timestamptz
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
-  SELECT to_timestamp(ts, 'Dy, DD Mon YYYY HH24:MI:SS')::timestamp;
+  SELECT to_timestamp(ts, 'Dy, DD Mon YYYY HH24:MI:SS')::timestamptz;
 $$;
 
+--
+-- Password login
+--
 CREATE OR REPLACE FUNCTION login(email text, plain_password text, ip inet, agent text) RETURNS uuid
 LANGUAGE sql STRICT LEAKPROOF SECURITY DEFINER AS $$
   -- Create a new session or update existing one
@@ -840,6 +943,9 @@ COMMENT ON FUNCTION login(email text, plain_password text, ip inet, agent text) 
  session. Return a session ID/nonce on successful login. Logins from the same user on the
  same browser will reuse an existing valid session to avoid session bloat.';
 
+--
+-- User logout
+--
 CREATE FUNCTION logout(session_id uuid, ip inet) RETURNS void
 LANGUAGE sql STRICT LEAKPROOF SECURITY DEFINER AS $$
   UPDATE sessions SET expires = greatest(created, now() + interval '-1 second'),
@@ -853,6 +959,9 @@ GRANT EXECUTE ON FUNCTION logout(uuid, inet) TO geekspeak_org;
 
 COMMENT ON FUNCTION logout(nonce uuid, ip inet) IS 'Invalidate the current session.';
 
+--
+-- Figure out MIME type by file extension. Will be deprecated by Unix find data wrapper
+--
 CREATE FUNCTION mime_type(file_ext text) RETURNS character varying
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT CASE
@@ -885,52 +994,71 @@ END $$;
 COMMENT ON FUNCTION mime_type(file_ext text) IS
 'Get the MIME type from the file extension.';
 
+--
+-- Update last modified and data hash for a given entity.
+-- Q: Wait! Why MD4!?!
+-- A: E-tags don't need to be cryptographically secure, only very fast. MD4 is fast.
+--
 CREATE FUNCTION modified() RETURNS trigger
 LANGUAGE plpgsql AS $$
   BEGIN
-  NEW.modified = now();
-  RETURN NEW;
+    NEW.modified = now();
+    NEW.hash = digest(jsonb_strip_nulls(row_to_json(NEW)::jsonb - 'hash'::text)::text,
+                      coalesce(current_setting('geekspeak.hash', true), 'md4'));
+    RETURN NEW;
   END;
 $$;
 
+--
+-- When anything associated with an episode updates—e.g., participants, bits—update the episode
+-- TODO: examine if we're duplicating trigger execution
+--
 CREATE FUNCTION episode_part_modified() RETURNS trigger
 LANGUAGE plpgsql AS $$
   BEGIN
-  UPDATE episodes SET modified = now() WHERE id = NEW.episode;
+  UPDATE episodes
+    SET modified = now(),
+        hash = digest(jsonb_strip_nulls(row_to_json(episode)::jsonb
+                                                    - 'hash'::text)::text
+                                                    || jsonb_build_object('modified', now()),
+                      coalesce(current_setting('geekspeak.hash', true), 'md4'))
+    WHERE id = NEW.episode;
   RETURN NEW;
   END;
 $$;
 
-CREATE FUNCTION person(nonce uuid, ip inet) RETURNS jsonb
-LANGUAGE plpgsql STRICT LEAKPROOF AS $$
-  DECLARE
-  result jsonb := null;
-
-  BEGIN
-  SELECT to_jsonb(userdata)
-    INTO STRICT result
-    FROM (SELECT email, display_name, description, bio
-            FROM people p, sessions s
-            WHERE nonce = nonce AND p.id = s.person AND expires > now()
-                  AND p.acls IS NOT NULL) userdata;
-
-  IF result IS NOT NULL THEN
-    UPDATE sessions
-      SET expires = now() + session_duration(), ips = add_ip(ips, ip)
-      WHERE nonce = nonce AND expires > now();
-  END IF;
-
-  RETURN result;
-  END;
+--
+-- Extend session duration
+--
+CREATE FUNCTION refresh_session(nonce uuid, ip inet) RETURNS uuid
+LANGUAGE sql STRICT LEAKPROOF AS $$
+  UPDATE sessions
+		SET expires = now() + session_duration(), ips = add_ip(ips, ip)
+		WHERE nonce = nonce AND expires > now()
+		RETURNING nonce;
 $$;
 
-COMMENT ON FUNCTION person(nonce uuid, ip inet) IS
-'Get the person info as json, sanitized for security. This also updates the session info to extend
+--
+-- Get the display name of the currently logged in user for UI display
+--
+CREATE FUNCTION person_name(INOUT session_id uuid, ip inet, INOUT etag text,
+                            OUT display_name character varying) RETURNS record
+LANGUAGE sql STRICT LEAKPROOF AS $$
+  SELECT refresh_session(session_id) AS session_id, etag(hash) AS etag, p.display_name
+    FROM sessions AS s
+    INNER JOIN people AS p ON (p.id = s.person)
+    WHERE session_id = s.nonce AND s.expires AS p.acls IS NOT NULL;
+$$;
+
+COMMENT ON FUNCTION person_name(nonce uuid, ip inet, etag text) IS
+'Get the person display name for UI. This also updates the session info to extend
  the session expiration and record the current ip address.';
 
-CREATE FUNCTION record(id episode_num) RETURNS TABLE(season smallint, episode smallint)
-LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
-  SELECT (id >> 9)::smallint, (id & 511)::smallint;
+--
+-- Extract the season and episode number from the encoded episode_num value
+--
+CREATE FUNCTION record(id episode_num, OUT season smallint, OUT episode smallint) RETURNS record LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
+  SELECT (id >> 9)::smallint AS season, (id & 511)::smallint AS episode;
 $$;
 
 COMMENT ON FUNCTION record(id episode_num) IS 'Passing in a value as an episode number
@@ -943,6 +1071,9 @@ Currently handles:
   episodes 0 - 511 (nine bits, unsigned)
 ';
 
+--
+-- Recover an account when the user has forgotten their password
+--
 CREATE FUNCTION recover(email text, ip inet, user_agent text) RETURNS void
 LANGUAGE sql STRICT SECURITY DEFINER AS $$
   INSERT INTO sessions (nonce, person, for_reset, ips)
@@ -959,6 +1090,9 @@ GRANT EXECUTE ON FUNCTION recover(text, inet, text) TO geekspeak_org;
 COMMENT ON FUNCTION recover(email text, ip inet, user_agent text) IS
 'Allows password recovery given a person''s email address, IP address, and user agent.';
 
+--
+-- Register a new account
+--
 CREATE FUNCTION register(email text, ip inet, user_agent text)
     RETURNS void
 LANGUAGE sql STRICT SECURITY DEFINER AS $$
@@ -979,6 +1113,9 @@ COMMENT ON FUNCTION register(email text, ip inet, user_agent text) IS
 
 Note: the person must be given the correct ACLs to perform most actions.';
 
+--
+-- Convert the episode number to a human-readable value, e.g., s17e15
+--
 CREATE FUNCTION text(id episode_num) RETURNS text
 LANGUAGE sql IMMUTABLE STRICT LEAKPROOF AS $$
   SELECT 's' || lpad(season::text, 2, '0')
@@ -990,6 +1127,9 @@ COMMENT ON FUNCTION text(id episode_num) IS
 'Converts an encoded episode number (episode_no/smallint) to a user-readable string in the form
  "s16e04b" where the previous signifies season 16 (2016), episode 4 (week 4), slot b (third slot).';
 
+--
+-- Update a password by passing in the old one, a la how most systems handle it for non-superusers
+--
 CREATE FUNCTION update_password(email_addr text, old_pass text, new_pass text) RETURNS boolean
 LANGUAGE sql STRICT LEAKPROOF SECURITY DEFINER AS $$
   UPDATE passwords AS pass
@@ -1008,19 +1148,20 @@ COMMENT ON FUNCTION update_password(email_addr text, old_pass text, new_pass tex
 'Update the password by successfully authenticating with email and old password first. New password
  is subject to password validation as well.';
 
+--
+-- Feeling triggered…
+--
 CREATE TRIGGER headlines_fulltextsearch BEFORE UPDATE ON headlines
   FOR EACH ROW EXECUTE PROCEDURE headlines_fts();
 
 CREATE TRIGGER episodes_fulltextsearch BEFORE UPDATE ON headlines
   FOR EACH ROW EXECUTE PROCEDURE episodes_fts();
 
-CREATE TRIGGER bit_templates_modified BEFORE UPDATE ON bit_templates
-  FOR EACH ROW EXECUTE PROCEDURE modified();
-
 CREATE TRIGGER bits_episode_modified AFTER INSERT OR DELETE OR UPDATE ON bits
   FOR EACH ROW EXECUTE PROCEDURE episode_part_modified();
 
-CREATE TRIGGER bits_modified BEFORE UPDATE ON bits FOR EACH ROW EXECUTE PROCEDURE modified();
+CREATE TRIGGER bits_modified BEFORE UPDATE ON bits
+  FOR EACH ROW EXECUTE PROCEDURE modified();
 
 CREATE TRIGGER episodes_modified BEFORE UPDATE ON episodes
   FOR EACH ROW EXECUTE PROCEDURE modified();
@@ -1037,19 +1178,12 @@ CREATE TRIGGER participants_modified BEFORE UPDATE ON participants
 CREATE TRIGGER people_modified BEFORE UPDATE ON people
   FOR EACH ROW EXECUTE PROCEDURE modified();
 
---
--- Set up reference directories relative to system configuration
---
---SELECT set_config('geekspeak.docroot',
---                  coalesce(nullif(current_setting('geekspeak.docroot', true), ''),
---                           '/var/www/geekspeak.org'),
---                  true);
+CREATE TRIGGER headlines_modified BEFORE UPDATE ON headlines
+  FOR EACH ROW EXECUTE PROCEDURE modified();
 
---SELECT set_config('geekspeak.mediaroot',
---                  coalesce(nullif(current_setting('geekspeak.mediaroot', true), ''),
---                           nullif(current_setting('geekspeak.docroot'), '') || '/media'),
---                  true);
-
+--
+-- Access the filesystem from a table
+--
 CREATE SERVER gs_multicorn
   FOREIGN DATA WRAPPER multicorn
   OPTIONS (wrapper 'multicorn.fsfdw.FilesystemFdw');
