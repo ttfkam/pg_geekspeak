@@ -1016,14 +1016,14 @@ $$;
 CREATE FUNCTION episode_part_modified() RETURNS trigger
 LANGUAGE plpgsql AS $$
   BEGIN
-  UPDATE episodes
-    SET modified = now(),
-        hash = digest(jsonb_strip_nulls(row_to_json(episode)::jsonb
-                                                    - 'hash'::text)::text
-                                                    || jsonb_build_object('modified', now()),
-                      coalesce(current_setting('geekspeak.hash', true), 'md4'))
-    WHERE id = NEW.episode;
-  RETURN NEW;
+    UPDATE episodes SET (modified, hash) =
+      (SELECT now(), digest(jsonb_strip_nulls(row_to_json(e)::jsonb
+                                              - 'hash'::text)::text
+                                              || jsonb_build_object('modified', now()),
+                            coalesce(current_setting('geekspeak.hash', true), 'md4'))
+         FROM episodes AS e
+         WHERE id = NEW.episode);
+    RETURN NEW;
   END;
 $$;
 
@@ -1044,10 +1044,11 @@ $$;
 CREATE FUNCTION person_name(INOUT session_id uuid, ip inet, INOUT etag text,
                             OUT display_name character varying) RETURNS record
 LANGUAGE sql STRICT LEAKPROOF AS $$
-  SELECT refresh_session(session_id) AS session_id, etag(hash) AS etag, p.display_name
+  SELECT refresh_session(session_id, ip) AS session_id, etag(p.hash) AS etag, p.display_name
     FROM sessions AS s
     INNER JOIN people AS p ON (p.id = s.person)
-    WHERE session_id = s.nonce AND s.expires AS p.acls IS NOT NULL;
+    LEFT JOIN acls AS a ON (s.person = a.id)
+    WHERE session_id = s.nonce AND s.expires > now() AND a.roles IS NOT NULL;
 $$;
 
 COMMENT ON FUNCTION person_name(nonce uuid, ip inet, etag text) IS
