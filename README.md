@@ -2,7 +2,7 @@
 The GeekSpeak podcast database schema
 
 ## Install
-On an Ubuntu system, run the following:
+On a Debian or Ubuntu system, run the following:
 
 ```bash
   $ sudo apt-get update
@@ -11,12 +11,12 @@ On an Ubuntu system, run the following:
 If not already installed, install PostgreSQL and required modules
 
 ```bash
-  $ sudo apt-get install postgresql-9.6 postgresql-9.6-python3-multicorn postgresql-contrib-9.6
+  $ sudo apt-get install postgresql-10 postgresql-10-python3-multicorn
 ```
 Install development tools
 
 ```bash
-  $ sudo apt-get install postgresql-server-dev-9.6
+  $ sudo apt-get install postgresql-server-dev-10
 ```
 Download pg_geekspeak and run the following inside the project directory
 
